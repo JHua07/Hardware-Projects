@@ -12,7 +12,7 @@
 
 ### 网络模块
 - **W5500以太网模块**: 提供有线网络连接
-  - CS引脚: GPIO 14
+  - CS引脚: GPIO 14 
   - RST引脚: GPIO 9
   - INT引脚: GPIO 10
   - MISO引脚: GPIO 12
