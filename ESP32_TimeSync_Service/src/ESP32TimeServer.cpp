@@ -9,6 +9,7 @@ ESP32Time rtc(0);  // 定义rtc对象
 bool debugIsOn = false;  // 根据需要设置默认值
 int SerialMonitorSpeed = 115200;
 
+// 定义时区
 TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240};  // 根据需要调整
 TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};
 Timezone myTZ(myDST, mySTD);
@@ -79,17 +80,20 @@ void setupEthernet()
     // 其余验证代码保持不变...
     delay(3000);
     
+    // 检查以太网硬件状态
     if (Ethernet.hardwareStatus() == EthernetNoHardware) 
     {
         printf("ERROR: Ethernet shield was not found!\n");
         return;
     }
-    
+
+    // 检查以太网连接状态
     if (Ethernet.linkStatus() == LinkOFF) 
     {
         printf("WARNING: Ethernet cable is not connected!\n");
     }
 
+    // 检查以太网是否成功连接
     IPAddress localIP = Ethernet.localIP();
     if (localIP == staticIP) 
     {
@@ -120,6 +124,9 @@ void startUDPServer()
     }
 }
 
+// 获取系统运行时间的函数
+// 返回格式为 "X days HH:MM:SS"
+// 例如 "2 12:34:56" 表示2天12小时34分钟56秒
 String GetUpTime()
 {
 

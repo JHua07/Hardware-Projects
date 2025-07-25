@@ -65,10 +65,12 @@ extern ESP32Time rtc;
 const unsigned long oneSecond_inMilliseconds = 1000;
 const unsigned long oneMinute_inMilliseconds = 60 * oneSecond_inMilliseconds;
 const unsigned long thirtyMinutes_inMilliseconds = 30 * oneMinute_inMilliseconds;
+const unsigned long fiveMinutes_inMilliseconds = 5 * oneMinute_inMilliseconds;
 const long oneSecond_inMicroseconds_L = 1000000;
 const double oneSecond_inMicroseconds_D = 1000000.0;
 
-const unsigned long periodicTimeRefreshPeriod = thirtyMinutes_inMilliseconds;
+// const unsigned long periodicTimeRefreshPeriod = thirtyMinutes_inMilliseconds;
+const unsigned long periodicTimeRefreshPeriod = fiveMinutes_inMilliseconds; // 5分钟周期
 const time_t safeguardThresholdInSeconds = 1;
 
 

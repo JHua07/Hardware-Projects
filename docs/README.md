@@ -74,6 +74,17 @@
 #define NTP_PACKET_SIZE 48 // NTP数据包大小
 ```
 
+#### 时间同步周期配置
+```cpp
+// 时间定义(默认时间单位为微秒)
+const unsigned long oneSecond_inMilliseconds = 1000;
+const unsigned long oneMinute_inMilliseconds = 60 * oneSecond_inMilliseconds;
+const unsigned long fiveMinutes_inMilliseconds = 5 * oneMinute_inMilliseconds;
+
+// 同步周期定义为5分钟
+const unsigned long periodicTimeRefreshPeriod = fiveMinutes_inMilliseconds;
+```
+
 ## 使用方法
 
 ### 1. 硬件连接

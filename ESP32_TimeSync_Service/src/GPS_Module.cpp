@@ -11,7 +11,7 @@ void init_GPS_module()
     pinMode(GPS_RX_PIN, INPUT);
     pinMode(GPS_TX_PIN, OUTPUT);
 
-    GPS_DEVICE.setRxBufferSize(2048); // 默认256，增加到1024
+    GPS_DEVICE.setRxBufferSize(2048); // 默认256，增加到2048以适应更大的数据量，设置过低或默认设置时会出现GNRMC数据丢失
     GPS_DEVICE.setTxBufferSize(512);  // 发送缓冲区也适当增加
 
     // 初始化GPS串口 (使用Serial2)
@@ -155,7 +155,7 @@ void setDateAndTimeFromGPS(void *parameter)
                         // 步骤G：格式化时间数据为系统可用格式
                         wt.tm_year -= 1900;                     // 调整年份（标准时间库格式）
                         wt.tm_mon -= 1;                         // 调整月份（1月=0）
-                        wt.tm_hour += 8; 
+                        wt.tm_hour += 8;                        // 假设GPS时间为UTC+8，调整为本地时间
                         candidateDateAndTime = mktime(&wt) + 1; // 转换为时间戳
 
                         if (debugIsOn)
