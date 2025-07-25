@@ -8,7 +8,7 @@
 ### 主控制器
 - **ESP32-S3-ETH<[官方文档](https://www.waveshare.com/wiki/ESP32-S3-ETH)>**: 主控制器
 
-  <img src="./attachments/ESP32-S3-ETH_Module.jpg" style="zoom:25%">
+  <img src="./attachments/ESP32-S3-ETH_Module.jpg" style="zoom:20%">
 
 ### 网络模块
 - **W5500以太网模块**: 提供有线网络连接
