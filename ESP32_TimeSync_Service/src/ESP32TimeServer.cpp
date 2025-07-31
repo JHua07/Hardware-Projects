@@ -55,7 +55,7 @@ void startAnOngoingTaskToRefreshTheDateAndTimeFromTheGPS()
 
 void setupEthernet()
 {
-    printf("Setting up Ethernet with static IP...\n");
+    printf("Setting up Ethernet ...\n");
     
     // 初始化SPI和重置芯片的代码保持不变...
     SPI.begin(W5500_SCK, W5500_MISO, W5500_MOSI, W5500_CS);
@@ -71,11 +71,15 @@ void setupEthernet()
     IPAddress gateway = ETHERNET_GATEWAY;
     IPAddress subnet = ETHERNET_SUBNET;
     IPAddress dns = ETHERNET_DNS;
-
-    printf("Configuring static IP: %s\n", staticIP.toString().c_str());
     
     // 直接使用静态IP初始化（移除所有DHCP相关代码）
-    Ethernet.begin(mac, staticIP, dns, gateway, subnet);
+    // Ethernet.begin(mac, staticIP, dns, gateway, subnet);
+    if(Ethernet.begin(mac) == 0) 
+    {
+        printf("DHCP failed, falling back to static IP...\n");
+        printf("Configuring static IP: %s\n", staticIP.toString().c_str());
+        Ethernet.begin(mac, staticIP, dns, gateway, subnet);
+    }
     
     // 其余验证代码保持不变...
     delay(3000);
@@ -104,9 +108,19 @@ void setupEthernet()
     }
     else
     {
-        printf("ERROR: Static IP configuration failed!\n");
-        eth_connected = false;
-        eth_got_IP = false;
+        if (localIP != IPAddress(0, 0, 0, 0)) 
+        {
+            printf("DHCP assigned IP: %s\n", localIP.toString().c_str());
+            eth_connected = true;
+            eth_got_IP = true;
+            ip = localIP.toString();
+        }
+        else
+        {
+            printf("ERROR: IP configuration failed!\n");
+            eth_connected = false;
+            eth_got_IP = false;
+        }
     }
 }
 
