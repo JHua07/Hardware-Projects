@@ -20,6 +20,7 @@
 // NTP 服务器配置
 #define NTP_PORT 123       // NTP标准端口
 #define NTP_PACKET_SIZE 48 // NTP数据包大小
+#define DHCP_STATUS false // 是否启用DHCP
 
 // GPS设备串口定义
 #define GPS_DEVICE Serial1  // 使用Serial作为GPS设备
@@ -70,7 +71,7 @@ const long oneSecond_inMicroseconds_L = 1000000;
 const double oneSecond_inMicroseconds_D = 1000000.0;
 
 // const unsigned long periodicTimeRefreshPeriod = thirtyMinutes_inMilliseconds;
-const unsigned long periodicTimeRefreshPeriod = fiveMinutes_inMilliseconds; // 5分钟周期
+const unsigned long periodicTimeRefreshPeriod = oneMinute_inMilliseconds; // 1分钟周期
 const time_t safeguardThresholdInSeconds = 1;
 
 

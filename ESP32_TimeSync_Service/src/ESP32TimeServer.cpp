@@ -10,8 +10,8 @@ bool debugIsOn = false;  // 根据需要设置默认值
 int SerialMonitorSpeed = 115200;
 
 // 定义时区
-TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240};  // 根据需要调整
-TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};
+TimeChangeRule myDST = {"CST", Second, Sun, Mar, 2, 480};   // 中国标准时间 UTC+8
+TimeChangeRule mySTD = {"CST", First, Sun, Nov, 2, 480};    // 中国没有夏令时
 Timezone myTZ(myDST, mySTD);
 
 SemaphoreHandle_t mutex;
@@ -72,14 +72,22 @@ void setupEthernet()
     IPAddress subnet = ETHERNET_SUBNET;
     IPAddress dns = ETHERNET_DNS;
     
-    // 直接使用静态IP初始化（移除所有DHCP相关代码）
-    // Ethernet.begin(mac, staticIP, dns, gateway, subnet);
-    if(Ethernet.begin(mac) == 0) 
+    if(DHCP_STATUS)
     {
-        printf("DHCP failed, falling back to static IP...\n");
-        printf("Configuring static IP: %s\n", staticIP.toString().c_str());
+        printf("Using DHCP to obtain IP address...\n");
+        if(Ethernet.begin(mac) == 0) 
+        {
+            printf("DHCP failed, falling back to static IP...\n");
+            printf("Configuring static IP: %s\n", staticIP.toString().c_str());
+            Ethernet.begin(mac, staticIP, dns, gateway, subnet);
+        }
+    }
+    else
+    {
+        printf("Using static IP configuration: %s\n", staticIP.toString().c_str());
         Ethernet.begin(mac, staticIP, dns, gateway, subnet);
     }
+    
     
     // 其余验证代码保持不变...
     delay(3000);
@@ -197,9 +205,14 @@ void GetAdjustedDateAndTimeStrings(time_t UTC_Time, String &dateString, String &
 
   dateString.concat(String(day(now_Local_Time)));
 
-  // format timeLine
+  // format timeLine (24小时制)
+  // 清空时间字符串
+  timeString = "";
 
-  timeString = String(hourFormat12(now_Local_Time) + 4);
+  if (hour(now_Local_Time) < 10)
+    timeString.concat("0");
+  
+  timeString.concat(String(hour(now_Local_Time) - 8));
 
   timeString.concat(":");
 
@@ -214,11 +227,6 @@ void GetAdjustedDateAndTimeStrings(time_t UTC_Time, String &dateString, String &
     timeString.concat("0");
 
   timeString.concat(String(second(now_Local_Time)));
-
-  if (isAM(now_Local_Time))
-    timeString.concat(" AM ");
-  else
-    timeString.concat(" PM ");
 };
 
 uint64_t getCurrentTimeInNTP64BitFormat()
@@ -506,5 +514,17 @@ void loop()
     // printf("ESP32 Time Server loop running...\n");
     // ESP32作为NTP服务器响应时间请求
     processNTPRequests();
-
+    
+    // 每30秒检查一次GPS同步任务状态
+    static unsigned long lastTaskCheck = 0;
+    if (millis() - lastTaskCheck > 30000)
+    {
+        if (debugIsOn)
+        {
+            printf("GPS sync task status: %s\n", 
+                   theTimeSettingProcessIsUnderway ? "Running" : "Idle");
+            printf("Current time: %s\n", rtc.getDateTime(true).c_str());
+        }
+        lastTaskCheck = millis();
+    }
 }

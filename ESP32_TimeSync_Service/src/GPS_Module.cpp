@@ -126,142 +126,191 @@ void setDateAndTimeFromGPS(void *parameter)
     {
         // 标记时间设置过程开始
         theTimeSettingProcessIsUnderway = true;
+        
+        // 等待PPS信号
         while (!ppsFlag)
+        {
+            vTaskDelay(10 / portTICK_PERIOD_MS); // 短暂延时，避免忙等待
+        }
+        
+
+        printf("Starting GPS time synchronization...\n");
+        
+        // 开始获取GNRMC的时间数据
+        if (gnrmcData.getLocate())
         {
             if (debugIsOn)
             {
-                printf("Starting GPS time synchronization...\n");
+                printf("Get valid GNRMC data\n");
             }
-            
-            // 开始获取GNRMC的时间数据
-            if (gnrmcData.getLocate())
+            if (gnrmcData.getDateValid(gnrmcData) && gnrmcData.getTimeValid(gnrmcData))
             {
-                if (debugIsOn)
-                {
-                    printf("Get valid GNRMC data\n");
-                }
-                if (gnrmcData.getDateValid(gnrmcData) && gnrmcData.getTimeValid(gnrmcData))
-                {
-                    struct tm wt;
-                    wt.tm_year = gnrmcData.getYear(gnrmcData);  // tm_year是从1900年开始的
-                    wt.tm_mon = gnrmcData.getMonth(gnrmcData);  // tm_mon
-                    wt.tm_mday = gnrmcData.getDay(gnrmcData);   // tm_mday
-                    wt.tm_hour = gnrmcData.getHour(gnrmcData);  // tm_hour
-                    wt.tm_min = gnrmcData.getMinute(gnrmcData); // tm_min
-                    wt.tm_sec = gnrmcData.getSecond(gnrmcData); // tm_sec
+                struct tm wt;
+                wt.tm_year = gnrmcData.getYear(gnrmcData);  // tm_year是从1900年开始的
+                wt.tm_mon = gnrmcData.getMonth(gnrmcData);  // tm_mon
+                wt.tm_mday = gnrmcData.getDay(gnrmcData);   // tm_mday
+                wt.tm_hour = gnrmcData.getHour(gnrmcData);  // tm_hour
+                wt.tm_min = gnrmcData.getMinute(gnrmcData); // tm_min
+                wt.tm_sec = gnrmcData.getSecond(gnrmcData); // tm_sec
 
-                    if ((wt.tm_year > 2022) && (wt.tm_mon > 0) && (wt.tm_mon < 13) && (wt.tm_mday > 0) && (wt.tm_mday < 32) && (wt.tm_hour < 24) && (wt.tm_min < 60) && (wt.tm_sec < 61))
+                if ((wt.tm_year > 2022) && (wt.tm_mon > 0) && (wt.tm_mon < 13) && (wt.tm_mday > 0) && (wt.tm_mday < 32) && (wt.tm_hour < 24) && (wt.tm_min < 60) && (wt.tm_sec < 61))
+                {
+                    // 步骤G：格式化时间数据为系统可用格式
+                    wt.tm_year -= 1900;                     // 调整年份（标准时间库格式）
+                    wt.tm_mon -= 1;                         // 调整月份（1月=0）
+                    // 注释掉时区调整，保持GPS的UTC时间
+                    wt.tm_hour += 8;                        // 假设GPS时间为UTC+8，调整为本地时间
+                    candidateDateAndTime = mktime(&wt) + 1; // 转换为时间戳（UTC时间）
+
+                    if (debugIsOn)
                     {
-                        // 步骤G：格式化时间数据为系统可用格式
-                        wt.tm_year -= 1900;                     // 调整年份（标准时间库格式）
-                        wt.tm_mon -= 1;                         // 调整月份（1月=0）
-                        wt.tm_hour += 8;                        // 假设GPS时间为UTC+8，调整为本地时间
-                        candidateDateAndTime = mktime(&wt) + 1; // 转换为时间戳
+                        String timeStr = "Candidate date and time (UTC) " + String(wt.tm_year + 1900) + "-" + String(wt.tm_mon + 1) + "-" + String(wt.tm_mday) + " " + String(wt.tm_hour) + ":" + String(wt.tm_min) + ":" + String(wt.tm_sec) + "\n";
+                        printf(timeStr.c_str());
+                    }
 
-                        if (debugIsOn)
+                    time_t wt_time = candidateDateAndTime;
+                    time_t candidateDateAndTime_t = time(&wt_time);
+
+                    // 等待PPS引脚复位
+                    vTaskDelay(200 / portTICK_PERIOD_MS);
+
+                    // 等待下一次PPS信号
+                    ppsFlag = false;
+                    while (!ppsFlag)
+                    {
+                        vTaskDelay(1 / portTICK_PERIOD_MS); // 短暂延时，避免忙等待
+                    }
+
+                    // 记录处理开始时间（用于补偿处理延迟）
+                    unsigned long pegProcessingAdjustmentStartTime = micros();
+
+                    // 进行安全检查
+                    bool SanityCheckPassed;
+                    time_t updateDelta = 0;
+
+                    if (thisIsTheFirstTimeSetBeingMadeAtStartup)
+                    {
+                        // 第一次设置时跳过安全检查
+                        SanityCheckPassed = true;
+                    }
+                    else
+                    {
+                        // 检查新时间与当前时间的差异是否在合理范围内
+                        time_t currentRTC_t = rtc.getEpoch();
+                        time_t currentRTCDateAndTime_t = time(&currentRTC_t);
+                        updateDelta = currentRTCDateAndTime_t - candidateDateAndTime_t;
+                        SanityCheckPassed = (((updateDelta >= safeguardThresholdLow) && (updateDelta <= safeguardThresholdHigh)));
+                    }
+
+                    // 如果安全检查通过，更新RTC时间
+                    if (SanityCheckPassed)
+                    {
+                        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(1000)) == pdTRUE) // 1秒超时，避免无限等待
                         {
-                            String timeStr = "Candidate date and time " + String(wt.tm_year) + " " + String(wt.tm_mon) + " " + String(wt.tm_mday) + " " + String(wt.tm_hour) + " " + String(wt.tm_min) + " " + String(wt.tm_sec) + "\n";
-                            printf(timeStr.c_str());
-                        }
+                            // 计算和应用处理延迟补偿
+                            unsigned long pegProcessingAdjustmentEndTime = micros();
+                            unsigned long ProcessingAdjustment = pegProcessingAdjustmentEndTime - pegProcessingAdjustmentStartTime;
 
-                        time_t wt = candidateDateAndTime;
-                        time_t candidateDateAndTime_t = time(&wt);
+                            // 设置系统实时时钟
+                            rtc.setTime((unsigned long)candidateDateAndTime, (int)ProcessingAdjustment);
+                            xSemaphoreGive(mutex);
 
-                        // 等待PPS引脚复位
-                        vTaskDelay(200 / portTICK_PERIOD_MS);
+                            printf("Date and time set to ");
+                            String ws = rtc.getDateTime(true);
+                            ws.trim();
+                            printf((ws + " (UTC)\n").c_str());
+                            
+                            // 重置状态标记
+                            SafeGuardTripped = false;
 
-                        // 等待下一次PPS信号
-                        ppsFlag = false;
-                        while (!ppsFlag)
-                            ;
-
-                        // 记录处理开始时间（用于补偿处理延迟）
-                        unsigned long pegProcessingAdjustmentStartTime = micros();
-
-                        // 进行安全检查
-                        bool SanityCheckPassed;
-                        time_t updateDelta;
-
-                        if (thisIsTheFirstTimeSetBeingMadeAtStartup)
-                        {
-                            // 第一次设置时跳过安全检查
-                            SanityCheckPassed = true;
-                        }
-                        else
-                        {
-                            // 检查新时间与当前时间的差异是否在合理范围内
-                            time_t currentRTC_t = rtc.getEpoch();
-                            time_t currentRTCDateAndTime_t = time(&currentRTC_t);
-                            updateDelta = currentRTCDateAndTime_t - candidateDateAndTime_t;
-                            bool SanityCheckPassed = (((updateDelta >= safeguardThresholdLow) && (updateDelta <= safeguardThresholdHigh)));
-                        }
-
-                        // 如果安全检查通过，更新RTC时间
-                        if (SanityCheckPassed)
-                        {
-                            if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE)
+                            // 检查是否为第一次同步
+                            if (thisIsTheFirstTimeSetBeingMadeAtStartup)
                             {
-                                // 计算和应用处理延迟补偿
-                                unsigned long pegProcessingAdjustmentEndTime = micros();
-                                unsigned long ProcessingAdjustment = pegProcessingAdjustmentEndTime - pegProcessingAdjustmentStartTime;
-
-                                // 设置系统实时时钟
-                                rtc.setTime((unsigned long)candidateDateAndTime, (int)ProcessingAdjustment);
-                                xSemaphoreGive(mutex);
-
-                                if (debugIsOn)
-                                {
-                                    printf("Date and time set to ");
-                                    String ws = rtc.getDateTime(true);
-                                    ws.trim();
-                                    printf((ws + " (UTC)\n").c_str());
-                                };
-                                // 重置状态标记
-                                SafeGuardTripped = false;
-                                theTimeSettingProcessIsUnderway = false;
                                 thisIsTheFirstTimeSetBeingMadeAtStartup = false;
-                                if(debugIsOn)
-                                {
-                                    printf("Waiting for next sync period...\n");
-                                }
-
-                                // 等待下一个同步周期（30分钟）
-                                vTaskDelay(periodicTimeRefreshPeriod / portTICK_PERIOD_MS);
+                                printf("First GPS sync completed, continuing immediately...\n");
+                                // 第一次同步后不等待，直接继续下一轮循环
                             }
                             else
                             {
-                                // 无法获取互斥锁（可能NTP请求正在进行）
-                                if (debugIsOn)
+                                printf("Waiting for next sync period...\n");
+                                
+                                // 等待下一个同步周期（仅非第一次同步）
+                                // 分段延时，避免长时间阻塞，便于调试和监控
+                                for (int i = 0; i < periodicTimeRefreshPeriod / 1000; i++)
                                 {
-                                    printf("Could not refresh the time as a NTP request was underway\n");
-                                    printf("Will try again\n");
+                                    vTaskDelay(1000 / portTICK_PERIOD_MS); // 每次延时1秒
+                                    
+                                    // 每5分钟输出一次状态（调试用）
+                                    if (debugIsOn && (i % 300 == 0) && (i > 0))
+                                    {
+                                        printf("GPS sync task running, next sync in %d seconds\n", (periodicTimeRefreshPeriod / 1000) - i);
+                                    }
                                 }
                             }
                         }
                         else
                         {
-                            // 异常处理 - 安全检查失败
+                            // 无法获取互斥锁（可能NTP请求正在进行）
                             if (debugIsOn)
                             {
-                                String message = "This date and time refresh failed its sanity check with a time delta of " + String(updateDelta) + " seconds";
-                                printf(message.c_str());
-                                printf("The time was not refreshed.");
-                                printf("Date and time are ");
-                                String ws = rtc.getDateTime(true);
-                                ws.trim();
-                                String timeMessage = ws + " (UTC)";
-                                printf(timeMessage.c_str());
-                                printf("Will try again");
-                            };
-
-                            // 设置安全保护标志
-                            SafeGuardTripped = true;
+                                printf("Could not refresh the time as a NTP request was underway\n");
+                                printf("Will try again\n");
+                            }
                         }
+                    }
+                    else
+                    {
+                        // 异常处理 - 安全检查失败
+                        if (debugIsOn)
+                        {
+                            String message = "This date and time refresh failed its sanity check with a time delta of " + String(updateDelta) + " seconds";
+                            printf(message.c_str());
+                            printf("The time was not refreshed.");
+                            printf("Date and time are ");
+                            String ws = rtc.getDateTime(true);
+                            ws.trim();
+                            String timeMessage = ws + " (UTC)";
+                            printf(timeMessage.c_str());
+                            printf("Will try again");
+                        };
+
+                        // 设置安全保护标志
+                        SafeGuardTripped = true;
+                    }
+                }
+                else
+                {
+                    if (debugIsOn)
+                    {
+                        printf("Invalid GPS time data received\n");
                     }
                 }
             }
+            else
+            {
+                if (debugIsOn)
+                {
+                    printf("GPS time data not valid\n");
+                }
+            }
         }
+        else
+        {
+            if (debugIsOn)
+            {
+                printf("Failed to get GPS location data\n");
+            }
+        }
+        
+        // 标记时间设置过程结束
+        theTimeSettingProcessIsUnderway = false;
+        
+        // 如果没有成功设置时间，短暂延时后重试
+        vTaskDelay(3000 / portTICK_PERIOD_MS); // 3秒后重试
     }
+    
+    // 这里永远不应该到达
+    vTaskDelete(NULL);
 }
 
 bool setTheGPSBaudRate(int maxAttemptsToChangeTheBaudRate)
