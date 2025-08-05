@@ -66,6 +66,8 @@
 #define ETHERNET_GATEWAY      IPAddress(192, 168, 120, 1) 
 #define ETHERNET_SUBNET       IPAddress(255, 255, 255, 0)
 #define ETHERNET_DNS          IPAddress(192, 168, 120, 1)
+
+#define DHCP_STATUS false // 是否启用DHCP
 ```
 
 #### NTP服务配置

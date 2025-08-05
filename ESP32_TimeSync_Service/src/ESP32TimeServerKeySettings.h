@@ -20,6 +20,8 @@
 // NTP 服务器配置
 #define NTP_PORT 123       // NTP标准端口
 #define NTP_PACKET_SIZE 48 // NTP数据包大小
+
+// DHCP配置
 #define DHCP_STATUS false // 是否启用DHCP
 
 // GPS设备串口定义
