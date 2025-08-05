@@ -107,7 +107,7 @@ def parse_satellite_data(obs_section, SYS_MAP):
             ch_tr_status = group[10] # 跟踪状态
             
             # ==== 卫星标识计算核心逻辑 ====
-            # 1. 转换跟踪状态为整数
+            # 1. 转换跟踪状态为整数（使用第10个字段）
             try:
                 ch_tr_int = int(ch_tr_status, 16)
             except ValueError:
@@ -260,6 +260,218 @@ def calculate_rover_position(input_file):
         print(f"计算坐标时出错: {e}")
         return -1326002.0000, 5323044.0000, 3243889.0000
 
+def parse_all_satellites(status_word):
+    """
+    解析全卫星系统的状态字，返回RINEX 3.02观测类型
+    :param status_word: 32位状态字（十六进制）
+    :return: dict {卫星系统: [观测类型列表]}
+    """
+    # 卫星系统映射（bit16-18）
+    SAT_SYSTEMS = {
+        0: 'G',  # GPS
+        1: 'R',  # GLONASS
+        2: 'S',  # SBAS
+        3: 'E',  # Galileo
+        4: 'C',  # BDS
+        5: 'J'   # QZSS
+    }
+
+    # 解析字段
+    sys_bits = (status_word >> 16) & 0x7  # bit16-18: 卫星系统
+    n5 = (status_word >> 20) & 0xF       # bit20-23: 信号类型
+    
+    # 获取卫星系统代码
+    sys_code = SAT_SYSTEMS.get(sys_bits, None)
+    if not sys_code:
+        return {}
+
+    # 有效性检查
+    carrier_valid = (status_word >> 10) & 0x1  # bit 10: 载波相位有效
+    range_valid = (status_word >> 12) & 0x1    # bit 12: 伪距有效
+    
+    # 根据系统生成基本观测类型
+    obs_types = []
+    
+    if sys_code == 'G':  # GPS
+        if n5 == 0:  # L1 C/A
+            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+        elif n5 == 17:  # L2C
+            obs_types = ['C2L', 'L2L', 'D2L', 'S2L']
+        else:
+            # 默认GPS观测类型
+            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+            
+    elif sys_code == 'R':  # GLONASS
+        if n5 == 0:  # L1 C/A
+            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+        elif n5 == 5:  # L2 C/A
+            obs_types = ['C2C', 'L2C', 'D2C', 'S2C']
+        else:
+            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+            
+    elif sys_code == 'C':  # BDS
+        if n5 == 0:  # B1I
+            obs_types = ['C1I', 'L1I', 'D1I', 'S1I']
+        elif n5 == 12:  # B2a
+            obs_types = ['C7Q', 'L7Q', 'D7Q', 'S7Q']
+        elif n5 == 21:  # B3I
+            obs_types = ['C6I', 'L6I', 'D6I', 'S6I']
+        else:
+            # 默认BDS观测类型
+            obs_types = ['C1I', 'L1I', 'D1I', 'S1I']
+            
+    elif sys_code == 'E':  # Galileo
+        if n5 == 2:  # E1C
+            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+        elif n5 == 12:  # E5a
+            obs_types = ['C5Q', 'L5Q', 'D5Q', 'S5Q']
+        elif n5 == 17:  # E5b
+            obs_types = ['C7Q', 'L7Q', 'D7Q', 'S7Q']
+        else:
+            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+            
+    elif sys_code == 'J':  # QZSS
+        if n5 == 0:  # L1 C/A
+            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+        elif n5 == 17:  # L2C
+            obs_types = ['C2L', 'L2L', 'D2L', 'S2L']
+        else:
+            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+            
+    elif sys_code == 'S':  # SBAS
+        obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
+
+    # 过滤无效数据
+    if not carrier_valid:
+        obs_types = [t for t in obs_types if not t.startswith(('L', 'D'))]
+    if not range_valid:
+        obs_types = [t for t in obs_types if not t.startswith('C')]
+
+    return {sys_code: obs_types}
+
+def generate_rinex_obs_types(status_words):
+    """
+    生成全系统的RINEX 3.02头文件观测类型定义
+    :param status_words: 状态字列表
+    :return: list (RINEX头格式行列表)
+    """
+    from collections import defaultdict
+    obs_dict = defaultdict(set)  # 使用set避免重复
+
+    # 从状态字中解析观测类型
+    for word in status_words:
+        result = parse_all_satellites(word)
+        for sys, types in result.items():
+            obs_dict[sys].update(types)
+
+    # 如果没有解析到任何观测类型，使用基于实际数据的默认类型
+    if not obs_dict:
+        print("警告：未能从状态字解析观测类型，使用数据分析结果")
+        # 基于实际输出数据分析的观测类型
+        obs_dict = {
+            'G': {'C1C', 'L1C', 'D1C', 'S1C', 'C2L', 'L2L', 'D2L', 'S2L'},
+            'R': {'C1C', 'L1C', 'D1C', 'S1C'},
+            'C': {'C1I', 'L1I', 'D1I', 'S1I', 'C7Q', 'L7Q', 'D7Q', 'S7Q', 'C6I', 'L6I', 'D6I', 'S6I'},
+            'E': {'C1C', 'L1C', 'D1C', 'S1C', 'C5Q', 'L5Q', 'D5Q', 'S5Q'}
+        }
+
+    # 排序并生成RINEX格式
+    lines = []
+    for sys in sorted(obs_dict.keys()):
+        types = sorted(list(obs_dict[sys]), key=lambda x: (x[1], x[0]))  # 按频点+类型排序
+        
+        if not types:  # 如果某个系统没有观测类型，跳过
+            continue
+            
+        # 确保格式符合RINEX标准（80字符宽度）
+        obs_str = ' '.join(types)
+        padding = ' ' * max(0, 60 - len(f"{sys}   {len(types)} {obs_str}"))
+        lines.append(f"{sys}   {len(types)} {obs_str}{padding}SYS / # / OBS TYPES ")
+    
+    return lines
+
+def analyze_satellite_systems(input_file):
+    """
+    分析输入文件中的卫星系统类型和实际观测类型，返回观测类型定义
+    """
+    try:
+        with open(input_file, 'r') as f:
+            content = f.read()
+        
+        # 查找所有OBSVMA记录
+        obsvma_pattern = r'#OBSVMA[^#]*'
+        obsvma_records = re.findall(obsvma_pattern, content, re.DOTALL)
+        
+        if not obsvma_records:
+            print("未找到OBSVMA记录，使用默认观测类型")
+            return get_default_obs_types()
+        
+        # 收集所有状态字
+        status_words = []
+        
+        # 分析前几个记录来收集状态字
+        for record in obsvma_records[:20]:  # 分析前20个记录以获得更多样本
+            try:
+                if ';' not in record:
+                    continue
+                    
+                header_section, obs_section = record.split(';', 1)
+                obs_section = obs_section.strip()
+                obs_section = re.sub(r'\*[0-9a-fA-F]+$', '', obs_section)
+                
+                # 解析观测数据字段
+                fields = [field.strip() for field in obs_section.split(',') if field.strip()]
+                
+                # 跳过第一个字段（观测信息数量）
+                if fields and fields[0].isdigit():
+                    fields = fields[1:]
+                
+                # 每11个字段为一组处理卫星数据（使用第10个字段）
+                for i in range(0, len(fields), 11):
+                    if i + 10 >= len(fields):
+                        break
+                        
+                    group = fields[i:i+11]
+                    
+                    try:
+                        # 第10个字段（索引10）是我们要解析的跟踪状态字
+                        status_field = group[10]
+                        status_word = int(status_field, 16)
+                        status_words.append(status_word)
+                    except:
+                        continue
+                        
+            except:
+                continue
+        
+        if not status_words:
+            print("未找到有效的状态字，使用默认观测类型")
+            return get_default_obs_types()
+        
+        # 使用精确的观测类型解析函数
+        obs_type_lines = generate_rinex_obs_types(status_words)
+        
+        print(f"从 {len(status_words)} 个状态字中解析出观测类型:")
+        for line in obs_type_lines:
+            print(f"  {line}")
+        
+        return obs_type_lines
+        
+    except Exception as e:
+        print(f"分析卫星系统时出错: {e}")
+        return get_default_obs_types()
+
+def get_default_obs_types():
+    """返回默认的观测类型定义"""
+    return [
+        "G    8 C1C L1C D1C S1C C2W L2W D2W S2W                      SYS / # / OBS TYPES ",
+        "R    8 C1C L1C D1C S1C C2C L2C D2C S2C                      SYS / # / OBS TYPES ",
+        "C   16 C1I L1I D1I S1I C7I L7I D7I S7I C6I L6I D6I S6I C1Q  SYS / # / OBS TYPES ",
+        "       L1Q D1Q S1Q                                          SYS / # / OBS TYPES ",
+        "E    8 C1C L1C D1C S1C C7Q L7Q D7Q S7Q                      SYS / # / OBS TYPES ",
+        "J    8 C1C L1C D1C S1C C2L L2L D2L S2L                      SYS / # / OBS TYPES "
+    ]
+
 def parse_multi_obsvma_to_rinex(input_file, output_file):
     """
     批处理多个OBSVMA数据的解析器
@@ -267,6 +479,9 @@ def parse_multi_obsvma_to_rinex(input_file, output_file):
     try:
         # 计算流动站坐标
         rover_x, rover_y, rover_z = calculate_rover_position(input_file)
+        
+        # 分析卫星系统类型
+        obs_type_lines = analyze_satellite_systems(input_file)
         
         # 读取输入文件
         with open(input_file, 'r') as f:
@@ -300,7 +515,7 @@ def parse_multi_obsvma_to_rinex(input_file, output_file):
         first_epoch = all_epochs[0]
         last_epoch = all_epochs[-1]
         
-        # 固定文件头（流动站版本 - 使用计算得到的坐标）
+        # 固定文件头（流动站版本 - 使用计算得到的坐标和动态观测类型）
         header = [
             "     3.02           OBSERVATION DATA    M                   RINEX VERSION / TYPE",
             "G = GPS,  R = GLONASS,  E = GALILEO,  C = BDS,  M = MIXED   COMMENT             ",
@@ -311,18 +526,19 @@ def parse_multi_obsvma_to_rinex(input_file, output_file):
             "Unicore#001         GEODETIC            Unicore UB4B0       REC # / TYPE / VERS ",
             "Ant001              ROVER                                   ANT # / TYPE        ",
             f" {rover_x:13.4f} {rover_y:13.4f} {rover_z:13.4f}                  APPROX POSITION XYZ ",
-            "        0.0000        0.0000        0.0000                  ANTENNA: DELTA H/E/N",
-            "G    8 C1C L1C D1C S1C C2W L2W D2W S2W                      SYS / # / OBS TYPES ",
-            "R    8 C1C L1C D1C S1C C2C L2C D2C S2C                      SYS / # / OBS TYPES ",
-            "C   16 C1I L1I D1I S1I C7I L7I D7I S7I C6I L6I D6I S6I C1Q  SYS / # / OBS TYPES ",
-            "       L1Q D1Q S1Q                                          SYS / # / OBS TYPES ",
-            "E    8 C1C L1C D1C S1C C7Q L7Q D7Q S7Q                      SYS / # / OBS TYPES ",
-            "J    8 C1C L1C D1C S1C C2L L2L D2L S2L                      SYS / # / OBS TYPES ",
+            "        0.0000        0.0000        0.0000                  ANTENNA: DELTA H/E/N"
+        ]
+        
+        # 添加动态分析的观测类型
+        header.extend(obs_type_lines)
+        
+        # 添加剩余的头部信息
+        header.extend([
             f"  {first_epoch['year']:4d}  {first_epoch['month']:4d}  {first_epoch['day']:4d}  {first_epoch['hour']:4d}  {first_epoch['minute']:4d}  {first_epoch['second']:6.1f}000000     GPS         TIME OF FIRST OBS    ",
             f"  {last_epoch['year']:4d}  {last_epoch['month']:4d}  {last_epoch['day']:4d}  {last_epoch['hour']:4d}  {last_epoch['minute']:4d}  {last_epoch['second']:6.1f}000000     GPS         TIME OF LAST OBS     ",
             "     0                                                      RCV CLOCK OFFS APPL  ",
             "                                                            END OF HEADER        "
-        ]
+        ])
         
         # 写入输出文件
         with open(output_file, 'w') as f:

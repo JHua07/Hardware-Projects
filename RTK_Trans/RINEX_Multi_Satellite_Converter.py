@@ -10,9 +10,9 @@ import re
 import argparse
 import sys
 from datetime import datetime
-from RINEX_Rover_NAV_GPS import parse_eph_seg_ascii as parse_gps, convert_to_nav_seg as convert_gps
-from RINEX_Rover_NAV_GAL import parse_eph_seg_ascii as parse_gal, convert_to_nav_seg as convert_gal
-from RINEX_Rover_NAV_BDS import parse_eph_seg_ascii as parse_bds, convert_to_nav_seg as convert_bds
+from include.RINEX_Rover_NAV_GPS import parse_eph_seg_ascii as parse_gps, convert_to_nav_seg as convert_gps
+from include.RINEX_Rover_NAV_GAL import parse_eph_seg_ascii as parse_gal, convert_to_nav_seg as convert_gal
+from include.RINEX_Rover_NAV_BDS import parse_eph_seg_ascii as parse_bds, convert_to_nav_seg as convert_bds
 
 class MultiSatelliteConverter:
     """多卫星系统RINEX转换器"""

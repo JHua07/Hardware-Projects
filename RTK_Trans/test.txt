@@ -1,0 +1,137 @@
+def parse_all_satellites(status_word):
+    """
+    解析全卫星系统的状态字，返回RINEX 3.02观测类型
+    :param status_word: 32位状态字（十六进制）
+    :return: dict {卫星系统: [观测类型列表]}
+    """
+    # 卫星系统映射（N4）
+    SAT_SYSTEMS = {
+        0: ('G', 'GPS'),
+        1: ('R', 'GLONASS'),
+        2: ('S', 'SBAS'),
+        3: ('E', 'Galileo'),
+        4: ('C', 'BDS'),
+        5: ('J', 'QZSS')
+    }
+
+    # 全系统信号类型映射（N5+N6）
+    SIGNAL_MAP = {
+        # GPS
+        'G': {
+            0: ('C1C', 'L1C', 'D1C', 'S1C'),  # L1 C/A
+            3: ('C1X', 'L1X', 'D1X', 'S1X'),  # L1C (pilot+data)
+            9: ('C2P', 'L2P', 'D2P', 'S2P'),  # L2P(Y)
+            17: ('C2L', 'L2L', 'D2L', 'S2L'), # L2C(L)
+            6: ('C5I', 'L5I', 'D5I', 'S5I'),  # L5
+            14: ('C5Q', 'L5Q', 'D5Q', 'S5Q')  # L5Q
+        },
+        # BDS
+        'C': {
+            0: ('C1I', 'L1I', 'D1I', 'S1I'),  # B1I
+            4: ('C1Q', 'L1Q', 'D1Q', 'S1Q'),  # B1Q
+            8: ('C1P', 'L1P', 'D1P', 'S1P'),  # B1C(Pilot)
+            23: ('C1D', 'L1D', 'D1D', 'S1D'), # B1C(Data)
+            17: ('C2I', 'L2I', 'D2I', 'S2I'), # B2I
+            12: ('C7Q', 'L7Q', 'D7Q', 'S7Q'), # B2a(Pilot)
+            28: ('C7D', 'L7D', 'D7D', 'S7D'), # B2a(Data)
+            21: ('C6I', 'L6I', 'D6I', 'S6I')  # B3I
+        },
+        # GLONASS
+        'R': {
+            0: ('C1C', 'L1C', 'D1C', 'S1C'),  # L1 C/A
+            5: ('C2C', 'L2C', 'D2C', 'S2C'),  # L2 C/A
+            6: ('C3I', 'L3I', 'D3I', 'S3I'),  # G3I
+            7: ('C3Q', 'L3Q', 'D3Q', 'S3Q')   # G3Q
+        },
+        # Galileo
+        'E': {
+            1: ('C1B', 'L1B', 'D1B', 'S1B'),  # E1B
+            2: ('C1C', 'L1C', 'D1C', 'S1C'),  # E1C
+            12: ('C5Q', 'L5Q', 'D5Q', 'S5Q'), # E5a
+            17: ('C7Q', 'L7Q', 'D7Q', 'S7Q'), # E5b
+            18: ('C6B', 'L6B', 'D6B', 'S6B'), # E6B
+            22: ('C6C', 'L6C', 'D6C', 'S6C')  # E6C
+        },
+        # QZSS
+        'J': {
+            0: ('C1C', 'L1C', 'D1C', 'S1C'),  # L1 C/A
+            6: ('C5I', 'L5I', 'D5I', 'S5I'),  # L5
+            14: ('C5Q', 'L5Q', 'D5Q', 'S5Q'), # L5Q
+            17: ('C2L', 'L2L', 'D2L', 'S2L')  # L2C
+        },
+        # SBAS
+        'S': {
+            0: ('C1C', 'L1C', 'D1C', 'S1C'),  # L1
+            6: ('C5I', 'L5I', 'D5I', 'S5I')   # L5
+        }
+    }
+
+    # 解析字段
+    n4 = (status_word & 0x000F0000) >> 16       # 卫星系统（表2）
+    n5 = (status_word & 0x00F00000) >> 20       # 信号类型（表3）
+    l2c_flag = (status_word & 0x04000000) >> 26  # L2C标志（表3-bit26）
+
+    # 获取卫星系统代码
+    sys_code, sys_name = SAT_SYSTEMS.get(n4, ('?', 'Unknown'))
+    if sys_code == '?':
+        return {}
+
+    # 获取基础观测类型
+    obs_types = []
+    if n5 in SIGNAL_MAP[sys_code]:
+        obs_types.extend(SIGNAL_MAP[sys_code][n5])
+
+    # GPS/QZSS的L2特殊处理
+    if sys_code in ('G', 'J') and l2c_flag:
+        obs_types.extend(SIGNAL_MAP[sys_code][17])  # 添加L2C
+
+    # 有效性检查（表7-20）
+    carrier_valid = (status_word & 0x00000100) >> 8   # 载波相位有效
+    range_valid = (status_word & 0x00001000) >> 12    # 伪距有效
+
+    # 过滤无效数据
+    if not carrier_valid:
+        obs_types = [t for t in obs_types if not t.startswith(('L', 'D'))]
+    if not range_valid:
+        obs_types = [t for t in obs_types if not t.startswith('C')]
+
+    return {sys_code: obs_types}
+
+def generate_full_rinex_header(status_words):
+    """
+    生成全系统的RINEX 3.02头文件观测类型定义
+    :param status_words: 状态字列表
+    :return: str (多行RINEX头)
+    """
+    from collections import defaultdict
+    obs_dict = defaultdict(list)
+
+    for word in status_words:
+        result = parse_all_satellites(word)
+        for sys, types in result.items():
+            obs_dict[sys].extend(types)
+
+    # 去重并排序
+    for sys in obs_dict:
+        obs_dict[sys] = sorted(list(set(obs_dict[sys])), 
+                              key=lambda x: (x[1], x[0]))  # 按频点+类型排序
+
+    # 生成RINEX格式
+    lines = []
+    for sys in sorted(obs_dict.keys()):
+        types = obs_dict[sys]
+        lines.append(f"{sys}   {len(types)} " + ' '.join(types) + "  SYS / # / OBS TYPES")
+    
+    return '\n'.join(lines)
+
+# 示例使用
+if __name__ == "__main__":
+    # 模拟多系统状态字（GPS/BDS/GLONASS）
+    test_words = [
+        0x00181C23,  # GPS L1C/A + L2C
+        0x04201D45,  # BDS B1I
+        0x10200F12   # GLONASS L1C/A
+    ]
+    
+    print("RINEX 3.02观测类型定义：")
+    print(generate_full_rinex_header(test_words))
