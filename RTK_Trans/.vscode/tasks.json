@@ -1,0 +1,50 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "gen BASE.obs from all.log",
+			"type": "shell",
+			"command": "D:/Python/python.exe",
+			"args": [
+				"RINEX_Multi_Base_OBS_Original.py",
+				"all.log",
+				"BASE.obs"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "gen BASE.obs from all.log (retry after filters)",
+			"type": "shell",
+			"command": "D:/Python/python.exe",
+			"args": [
+				"RINEX_Multi_Base_OBS_Original.py",
+				"all.log",
+				"BASE.obs"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "gen BASE.obs from all.log (align columns)",
+			"type": "shell",
+			"command": "D:/Python/python.exe",
+			"args": [
+				"RINEX_Multi_Base_OBS_Original.py",
+				"all.log",
+				"BASE.obs"
+			],
+			"isBackground": false,
+			"problemMatcher": [
+				"$gcc"
+			],
+			"group": "build"
+		}
+	]
+}
