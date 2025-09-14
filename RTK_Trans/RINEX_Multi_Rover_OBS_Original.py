@@ -29,25 +29,30 @@ def parse_obsvma_to_rinex(obsvma_data, output_file, detected_obs_types=None):
         
         # 提取历元头信息
         # 格式: #OBSVMA,88,GPS,FINE,2368,291726000,0,0,18,37
-        time_system = header_fields[2] if len(header_fields) > 2 else "GPS"  # 第3个字段：时间系统
-        time_quality = header_fields[3] if len(header_fields) > 3 else "FINE"  # 第4个字段：时间质量
-        gps_week = int(header_fields[4]) if len(header_fields) > 4 else 2368  # 第5个字段：GPS周数
-        gps_tow_ms = int(header_fields[5]) if len(header_fields) > 5 else 291726000  # 第6个字段：GPS周内秒(ms)
-        leap_seconds = int(header_fields[8]) if len(header_fields) > 8 else 18  # 第9个字段：闰秒
-        output_delay = int(header_fields[9]) if len(header_fields) > 9 else 0  # 第10个字段：数据输出延迟
-        
-        # 将GPS周数和周内秒转换为年月日时分秒
+        time_system = header_fields[2] if len(header_fields) > 2 else "GPS"      # 第4个字段: 时间系统 (TimeRef)
+        time_quality = header_fields[3] if len(header_fields) > 3 else "FINE"     # 第5个字段: 时间质量 (TimeStatus)
+        gps_week = int(header_fields[4]) if len(header_fields) > 4 else 0        # 第6个字段: GPS周数 (Wn)
+        gps_tow_ms = int(header_fields[5]) if len(header_fields) > 5 else 0      # 第7个字段: GPS周内秒(ms) (Ms)
+        # leap_seconds = int(header_fields[8]) if len(header_fields) > 8 else 18   # 第10个字段: 闰秒 (Leap sec)， UPrecise好像不需要闰秒
+        leap_seconds = 0
+        output_delay = int(header_fields[9]) if len(header_fields) > 9 else 0 # 第11个字段: 数据输出延迟 (Output Delay)
+
+        import datetime
+
+        # 将GPS周数和周内秒转换为UTC时间
         gps_tow_s = gps_tow_ms / 1000.0  # 转换为秒
         
-        # GPS起始时间：1980年1月6日00:00:00 UTC
-        gps_epoch_days = 6 + 365 * 10 + 2  # 1970到1980年的天数（包含闰年）
-        gps_epoch_seconds = gps_epoch_days * 24 * 3600
+        # GPS时间的原点是 1980年1月6日 00:00:00 UTC
+        gps_epoch = datetime.datetime(1980, 1, 6, 0, 0, 0)
         
-        # 计算UTC时间
-        total_seconds = gps_epoch_seconds + gps_week * 7 * 24 * 3600 + gps_tow_s - leap_seconds
+        # 计算从GPS原点开始的总秒数
+        total_seconds_from_epoch = (gps_week * 7 * 24 * 3600) + gps_tow_s
         
-        import datetime
-        utc_time = datetime.datetime.utcfromtimestamp(total_seconds)
+        # 计算GPS时间
+        gps_time = gps_epoch + datetime.timedelta(seconds=total_seconds_from_epoch)
+        
+        # 从GPS时间中减去闰秒得到UTC时间
+        utc_time = gps_time - datetime.timedelta(seconds=leap_seconds)
         
         # 格式化为RINEX格式的时间
         year = utc_time.year
@@ -211,88 +216,121 @@ def parse_satellite_data(obs_section, SYS_MAP, detected_obs_types=None):
 
 def determine_obs_types_from_status(status_word, sys_char):
     """
-    根据跟踪状态字和卫星系统确定观测类型
-    严格按照table.txt定义，不添加任何默认值
+    根据跟踪状态字和卫星系统确定观测类型（与 REF_CODES/unicore.c 保持一致）
+    - 信号类型(sigtype): 位21-25（5位）
+    - L2C 标志(l2c): 位26（1位），仅在 GPS/QZSS 的 sigtype==9 时区分 L2C(M) 与 L2P(Y)/semi-codeless
     """
     obs_types = set()
-    
-    # 提取信号类型信息 (bit20-23)
-    n5 = (status_word >> 20) & 0xF
-    
-    # 严格按照table.txt定义进行映射，不添加任何默认值
-    if sys_char == 'G':  # GPS信号类型
-        if n5 == 0:  # L1 C/A -> C1C L1C D1C S1C
+
+    sigtype = (status_word >> 21) & 0x1F
+    l2c = (status_word >> 26) & 0x01
+
+    if sys_char == 'G':  # GPS
+        if sigtype == 0:  # L1 C/A
             obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
-        elif n5 == 3:  # L1C (pilot+data) -> C1X L1X D1X S1X (但您期望C2W，需要特殊处理)
-            obs_types.update(['C2W', 'L2W', 'D2W', 'S2W'])
-        elif n5 == 6:  # L5 data -> C5I L5I D5I S5I
+        elif sigtype == 3:  # L1C Pilot
+            obs_types.update(['C1L', 'L1L', 'D1L', 'S1L'])
+        elif sigtype == 11:  # L1C Data
+            obs_types.update(['C1S', 'L1S', 'D1S', 'S1S'])
+        elif sigtype == 6:  # L5 Data
             obs_types.update(['C5I', 'L5I', 'D5I', 'S5I'])
-        elif n5 == 9:  # L2P(Y) -> C2P L2P D2P S2P
-            obs_types.update(['C2P', 'L2P', 'D2P', 'S2P'])
-        elif n5 == 14:  # L5 pilot -> C5Q L5Q D5Q S5Q
+        elif sigtype == 14:  # L5 Pilot
             obs_types.update(['C5Q', 'L5Q', 'D5Q', 'S5Q'])
-        elif n5 == 17:  # L2C(L) -> C2L L2L D2L S2L
+        elif sigtype == 9:  # L2: P(Y)/semi-codeless or L2C(M)
+            if l2c == 1:
+                obs_types.update(['C2S', 'L2S', 'D2S', 'S2S'])  # L2C(M)
+            else:
+                obs_types.update(['C2W', 'L2W', 'D2W', 'S2W'])  # L2P(Y) / semi-codeless
+        elif sigtype == 17:  # L2C(L)
             obs_types.update(['C2L', 'L2L', 'D2L', 'S2L'])
-            
-    elif sys_char == 'R':  # GLONASS信号类型
-        if n5 == 0:  # L1 C/A -> C1C L1C D1C S1C
+
+    elif sys_char == 'R':  # GLONASS
+        if sigtype == 0:  # L1 C/A
             obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
-        elif n5 == 5:  # L2 C/A -> C2C L2C D2C S2C
+        elif sigtype == 5:  # L2 C/A
             obs_types.update(['C2C', 'L2C', 'D2C', 'S2C'])
-        elif n5 == 6:  # G3I -> C3I L3I D3I S3I
+        elif sigtype == 6:  # G3I
             obs_types.update(['C3I', 'L3I', 'D3I', 'S3I'])
-        elif n5 == 7:  # G3Q -> C3Q L3Q D3Q S3Q
+        elif sigtype == 7:  # G3Q
             obs_types.update(['C3Q', 'L3Q', 'D3Q', 'S3Q'])
-            
-    elif sys_char == 'C':  # BDS信号类型
-        if n5 == 0:  # B1I -> C1I L1I D1I S1I
-            obs_types.update(['C1I', 'L1I', 'D1I', 'S1I'])
-        elif n5 == 4:  # B1Q -> C1Q L1Q D1Q S1Q
-            obs_types.update(['C1Q', 'L1Q', 'D1Q', 'S1Q'])
-        elif n5 == 8:  # B1C(Pilot) -> C1P L1P D1P S1P
-            obs_types.update(['C1P', 'L1P', 'D1P', 'S1P'])
-        elif n5 == 12:  # B2a(Pilot) -> C7Q L7Q D7Q S7Q
-            obs_types.update(['C7Q', 'L7Q', 'D7Q', 'S7Q'])
-        elif n5 == 17:  # B2I -> C2I L2I D2I S2I
-            obs_types.update(['C2I', 'L2I', 'D2I', 'S2I'])
-        elif n5 == 21:  # B3I -> C6I L6I D6I S6I
-            obs_types.update(['C6I', 'L6I', 'D6I', 'S6I'])
-        elif n5 == 23:  # B1C(Data) -> C1D L1D D1D S1D
-            obs_types.update(['C1D', 'L1D', 'D1D', 'S1D'])
-        elif n5 == 28:  # B2a(Data) -> C7D L7D D7D S7D
-            obs_types.update(['C7D', 'L7D', 'D7D', 'S7D'])
-            
-    elif sys_char == 'E':  # Galileo信号类型
-        if n5 == 1:  # E1B -> C1B L1B D1B S1B
+
+    elif sys_char == 'E':  # Galileo
+        if sigtype == 1:  # E1B
             obs_types.update(['C1B', 'L1B', 'D1B', 'S1B'])
-        elif n5 == 2:  # E1C -> C1C L1C D1C S1C
+        elif sigtype == 2:  # E1C
             obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
-        elif n5 == 12:  # E5a -> C5Q L5Q D5Q S5Q
+        elif sigtype == 12:  # E5a Pilot
             obs_types.update(['C5Q', 'L5Q', 'D5Q', 'S5Q'])
-        elif n5 == 17:  # E5b -> C7Q L7Q D7Q S7Q
+        elif sigtype == 17:  # E5b Pilot
             obs_types.update(['C7Q', 'L7Q', 'D7Q', 'S7Q'])
-        elif n5 == 18:  # E6B -> C6B L6B D6B S6B
+        elif sigtype == 18:  # E6B
             obs_types.update(['C6B', 'L6B', 'D6B', 'S6B'])
-        elif n5 == 22:  # E6C -> C6C L6C D6C S6C
+        elif sigtype == 22:  # E6C
             obs_types.update(['C6C', 'L6C', 'D6C', 'S6C'])
-            
-    elif sys_char == 'J':  # QZSS信号类型
-        if n5 == 0:  # L1 C/A -> C1C L1C D1C S1C
+
+    elif sys_char == 'J':  # QZSS
+        if sigtype == 0:  # L1 C/A
             obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
-        elif n5 == 6:  # L5 data -> C5I L5I D5I S5I
+        elif sigtype == 1:  # L1E
+            obs_types.update(['C1E', 'L1E', 'D1E', 'S1E'])
+        elif sigtype == 3:  # L1C pilot
+            obs_types.update(['C1L', 'L1L', 'D1L', 'S1L'])
+        elif sigtype == 4:  # L1Z (L1S)
+            obs_types.update(['C1Z', 'L1Z', 'D1Z', 'S1Z'])
+        elif sigtype == 6:  # L5 Data
             obs_types.update(['C5I', 'L5I', 'D5I', 'S5I'])
-        elif n5 == 14:  # L5 pilot -> C5Q L5Q D5Q S5Q
+        elif sigtype == 9:  # L2: P(Y)/semi-codeless or L2C(M)
+            if l2c == 1:
+                obs_types.update(['C2S', 'L2S', 'D2S', 'S2S'])
+            else:
+                obs_types.update(['C2W', 'L2W', 'D2W', 'S2W'])
+        elif sigtype == 11:  # L1C Data
+            obs_types.update(['C1S', 'L1S', 'D1S', 'S1S'])
+        elif sigtype == 14:  # L5 Pilot
             obs_types.update(['C5Q', 'L5Q', 'D5Q', 'S5Q'])
-        elif n5 == 17:  # L2C(L) -> C2L L2L D2L S2L
+        elif sigtype == 17:  # L2C(L)
             obs_types.update(['C2L', 'L2L', 'D2L', 'S2L'])
-            
-    elif sys_char == 'S':  # SBAS信号类型
-        if n5 == 0:  # L1 C/A -> C1C L1C D1C S1C
+        elif sigtype == 21:  # L6Z (L6D)
+            obs_types.update(['C6Z', 'L6Z', 'D6Z', 'S6Z'])
+        elif sigtype == 27:  # L6E
+            obs_types.update(['C6E', 'L6E', 'D6E', 'S6E'])
+
+    elif sys_char == 'C':  # BDS (Beidou)
+        if sigtype == 0:  # B1I
+            obs_types.update(['C1I', 'L1I', 'D1I', 'S1I'])
+        elif sigtype == 4:  # B1Q
+            obs_types.update(['C1Q', 'L1Q', 'D1Q', 'S1Q'])
+        elif sigtype == 8:  # B1C pilot
+            obs_types.update(['C1P', 'L1P', 'D1P', 'S1P'])
+        elif sigtype == 23:  # B1C data
+            obs_types.update(['C1D', 'L1D', 'D1D', 'S1D'])
+        elif sigtype == 5:  # B2Q
+            obs_types.update(['C7Q', 'L7Q', 'D7Q', 'S7Q'])
+        elif sigtype == 17:  # B2I
+            obs_types.update(['C2I', 'L2I', 'D2I', 'S2I'])
+        elif sigtype == 12:  # B2a Pilot
+            obs_types.update(['C7Q', 'L7Q', 'D7Q', 'S7Q'])
+        elif sigtype == 28:  # B2a Data
+            obs_types.update(['C7D', 'L7D', 'D7D', 'S7D'])
+        elif sigtype == 6:  # B3Q
+            obs_types.update(['C6Q', 'L6Q', 'D6Q', 'S6Q'])
+        elif sigtype == 21:  # B3I
+            obs_types.update(['C6I', 'L6I', 'D6I', 'S6I'])
+        elif sigtype == 13:  # B2b (I)
+            obs_types.update(['C7P', 'L7P', 'D7P', 'S7P'])
+
+    elif sys_char == 'I':  # IRNSS / NavIC
+        if sigtype == 6:  # L5 Data
+            obs_types.update(['C5A', 'L5A', 'D5A', 'S5A'])
+        elif sigtype == 14:  # L5 Pilot
+            obs_types.update(['C5C', 'L5C', 'D5C', 'S5C'])
+
+    elif sys_char == 'S':  # SBAS
+        if sigtype == 0:  # L1 C/A
             obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
-        elif n5 == 6:  # L5 -> C5I L5I D5I S5I
+        elif sigtype == 6:  # L5I
             obs_types.update(['C5I', 'L5I', 'D5I', 'S5I'])
-    
-    # 严格按照table.txt定义，没有匹配的n5值就不返回任何观测类型
+
     return obs_types
 
 def calculate_rover_position(input_file):
@@ -377,7 +415,9 @@ def parse_all_satellites(status_word):
 
     # 解析字段
     sys_bits = (status_word >> 16) & 0x7  # bit16-18: 卫星系统
-    n5 = (status_word >> 20) & 0xF       # bit20-23: 信号类型
+    # 与 C 代码一致：sigtype 位21-25（5位），L2C 位26
+    sigtype = (status_word >> 21) & 0x1F
+    l2c = (status_word >> 26) & 0x01
     
     # 获取卫星系统代码
     sys_code = SAT_SYSTEMS.get(sys_bits, None)
@@ -388,80 +428,8 @@ def parse_all_satellites(status_word):
     carrier_valid = (status_word >> 10) & 0x1  # bit 10: 载波相位有效
     range_valid = (status_word >> 12) & 0x1    # bit 12: 伪距有效
     
-    # 根据系统生成基本观测类型 - 严格按照table.txt定义
-    obs_types = []
-    
-    if sys_code == 'G':  # GPS信号类型
-        if n5 == 0:  # L1 C/A -> C1C L1C D1C S1C
-            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
-        elif n5 == 3:  # L1C (pilot+data) -> C1X L1X D1X S1X (但根据期望结果映射为C2W)
-            obs_types = ['C2W', 'L2W', 'D2W', 'S2W']
-        elif n5 == 6:  # L5 data -> C5I L5I D5I S5I
-            obs_types = ['C5I', 'L5I', 'D5I', 'S5I']
-        elif n5 == 9:  # L2P(Y) -> C2P L2P D2P S2P
-            obs_types = ['C2P', 'L2P', 'D2P', 'S2P']
-        elif n5 == 14:  # L5 pilot -> C5Q L5Q D5Q S5Q
-            obs_types = ['C5Q', 'L5Q', 'D5Q', 'S5Q']
-        elif n5 == 17:  # L2C(L) -> C2L L2L D2L S2L
-            obs_types = ['C2L', 'L2L', 'D2L', 'S2L']
-            
-    elif sys_code == 'R':  # GLONASS信号类型
-        if n5 == 0:  # L1 C/A -> C1C L1C D1C S1C
-            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
-        elif n5 == 5:  # L2 C/A -> C2C L2C D2C S2C
-            obs_types = ['C2C', 'L2C', 'D2C', 'S2C']
-        elif n5 == 6:  # G3I -> C3I L3I D3I S3I
-            obs_types = ['C3I', 'L3I', 'D3I', 'S3I']
-        elif n5 == 7:  # G3Q -> C3Q L3Q D3Q S3Q
-            obs_types = ['C3Q', 'L3Q', 'D3Q', 'S3Q']
-            
-    elif sys_code == 'C':  # BDS信号类型
-        if n5 == 0:  # B1I -> C1I L1I D1I S1I
-            obs_types = ['C1I', 'L1I', 'D1I', 'S1I']
-        elif n5 == 4:  # B1Q -> C1Q L1Q D1Q S1Q
-            obs_types = ['C1Q', 'L1Q', 'D1Q', 'S1Q']
-        elif n5 == 8:  # B1C(Pilot) -> C1P L1P D1P S1P
-            obs_types = ['C1P', 'L1P', 'D1P', 'S1P']
-        elif n5 == 12:  # B2a(Pilot) -> C7Q L7Q D7Q S7Q
-            obs_types = ['C7Q', 'L7Q', 'D7Q', 'S7Q']
-        elif n5 == 17:  # B2I -> C2I L2I D2I S2I
-            obs_types = ['C2I', 'L2I', 'D2I', 'S2I']
-        elif n5 == 21:  # B3I -> C6I L6I D6I S6I
-            obs_types = ['C6I', 'L6I', 'D6I', 'S6I']
-        elif n5 == 23:  # B1C(Data) -> C1D L1D D1D S1D
-            obs_types = ['C1D', 'L1D', 'D1D', 'S1D']
-        elif n5 == 28:  # B2a(Data) -> C7D L7D D7D S7D
-            obs_types = ['C7D', 'L7D', 'D7D', 'S7D']
-            
-    elif sys_code == 'E':  # Galileo信号类型
-        if n5 == 1:  # E1B -> C1B L1B D1B S1B
-            obs_types = ['C1B', 'L1B', 'D1B', 'S1B']
-        elif n5 == 2:  # E1C -> C1C L1C D1C S1C
-            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
-        elif n5 == 12:  # E5a -> C5Q L5Q D5Q S5Q
-            obs_types = ['C5Q', 'L5Q', 'D5Q', 'S5Q']
-        elif n5 == 17:  # E5b -> C7Q L7Q D7Q S7Q
-            obs_types = ['C7Q', 'L7Q', 'D7Q', 'S7Q']
-        elif n5 == 18:  # E6B -> C6B L6B D6B S6B
-            obs_types = ['C6B', 'L6B', 'D6B', 'S6B']
-        elif n5 == 22:  # E6C -> C6C L6C D6C S6C
-            obs_types = ['C6C', 'L6C', 'D6C', 'S6C']
-            
-    elif sys_code == 'J':  # QZSS信号类型
-        if n5 == 0:  # L1 C/A -> C1C L1C D1C S1C
-            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
-        elif n5 == 6:  # L5 data -> C5I L5I D5I S5I
-            obs_types = ['C5I', 'L5I', 'D5I', 'S5I']
-        elif n5 == 14:  # L5 pilot -> C5Q L5Q D5Q S5Q
-            obs_types = ['C5Q', 'L5Q', 'D5Q', 'S5Q']
-        elif n5 == 17:  # L2C(L) -> C2L L2L D2L S2L
-            obs_types = ['C2L', 'L2L', 'D2L', 'S2L']
-            
-    elif sys_code == 'S':  # SBAS信号类型
-        if n5 == 0:  # L1 C/A -> C1C L1C D1C S1C
-            obs_types = ['C1C', 'L1C', 'D1C', 'S1C']
-        elif n5 == 6:  # L5 -> C5I L5I D5I S5I
-            obs_types = ['C5I', 'L5I', 'D5I', 'S5I']
+    # 基于统一映射生成观测类型
+    obs_types = list(determine_obs_types_from_status(status_word, sys_code))
 
     # 过滤无效数据
     if not carrier_valid:
@@ -507,24 +475,7 @@ def generate_rinex_obs_types(status_words):
     
     return lines
 
-def analyze_satellite_systems(input_file):
-    """
-    返回期望的观测类型配置，按照用户指定的格式
-    """
-    # 直接返回用户期望的观测类型配置
-    obs_type_lines = [
-        "G   8 C1C C2W D1C D2W L1C L2W S1C S2W                  SYS / # / OBS TYPES ",
-        "R   8 C1C C2C D1C D2C L1C L2C S1C S2C                  SYS / # / OBS TYPES ",  
-        "C  12 C1I C6I C7Q D1I D6I D7Q L1I L6I L7Q S1I S6I S7Q   SYS / # / OBS TYPES ",
-        "E   8 C1C C5Q D1C D5Q L1C L5Q S1C S5Q                  SYS / # / OBS TYPES ",
-        "J   8 C1C C2L D1C D2L L1C L2L S1C S2L                  SYS / # / OBS TYPES "
-    ]
-    
-    print("使用预定义的观测类型配置:")
-    for line in obs_type_lines:
-        print(f"  {line[:60]}")
-    
-    return obs_type_lines
+
 
 def generate_obs_types_from_detected(detected_obs_types):
     """
@@ -571,16 +522,7 @@ def generate_obs_types_from_detected(detected_obs_types):
     
     return lines
 
-def get_default_obs_types():
-    """返回默认的观测类型定义"""
-    return [
-        "G    8 C1C L1C D1C S1C C2W L2W D2W S2W                      SYS / # / OBS TYPES ",
-        "R    8 C1C L1C D1C S1C C2C L2C D2C S2C                      SYS / # / OBS TYPES ",
-        "C   16 C1I L1I D1I S1I C7I L7I D7I S7I C6I L6I D6I S6I C1Q  SYS / # / OBS TYPES ",
-        "       L1Q D1Q S1Q                                          SYS / # / OBS TYPES ",
-        "E    8 C1C L1C D1C S1C C7Q L7Q D7Q S7Q                      SYS / # / OBS TYPES ",
-        "J    8 C1C L1C D1C S1C C2L L2L D2L S2L                      SYS / # / OBS TYPES "
-    ]
+
 
 def parse_multi_obsvma_to_rinex(input_file, output_file):
     """
@@ -626,8 +568,12 @@ def parse_multi_obsvma_to_rinex(input_file, output_file):
         for sys_char, obs_types in detected_obs_types.items():
             print(f"  {sys_char}: {sorted(list(obs_types))}")
         
-        # 使用预定义的观测类型配置而不是检测到的观测类型
-        obs_type_lines = analyze_satellite_systems(input_file)
+        # 根据实际检测到的观测类型生成头部
+        print("根据实际检测到的观测类型生成头部:")
+        obs_type_lines = generate_obs_types_from_detected(detected_obs_types)
+        if not obs_type_lines:
+            print("错误：未能从数据中检测到任何有效的观测类型，无法生成头部。")
+            return
         
         # 获取时间范围
         first_epoch = all_epochs[0]

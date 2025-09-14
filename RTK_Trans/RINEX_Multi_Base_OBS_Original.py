@@ -4,134 +4,9 @@
 import sys
 import re
 
-def parse_all_satellites(status_word):
+def parse_obsvbasea_to_rinex(obsvbasea_data, output_file, detected_obs_types=None):
     """
-    解析全卫星系统的状态字，返回RINEX 3.02观测类型
-    :param status_word: 32位状态字（十六进制）
-    :return: dict {卫星系统: [观测类型列表]}
-    """
-    # 卫星系统映射（bit16-18）
-    SAT_SYSTEMS = {
-        0: 'G',  # GPS
-        1: 'R',  # GLONASS
-        2: 'S',  # SBAS
-        3: 'E',  # Galileo
-        4: 'C',  # BDS
-        5: 'J'   # QZSS
-    }
-
-    # 解析字段
-    sys_bits = (status_word >> 16) & 0x7  # bit16-18: 卫星系统
-    n5 = (status_word >> 20) & 0xF       # bit20-23: 信号类型
-    
-    # 获取卫星系统代码
-    sys_code = SAT_SYSTEMS.get(sys_bits, None)
-    if not sys_code:
-        return {}
-
-    # 有效性检查
-    carrier_valid = (status_word >> 10) & 0x1  # bit 10: 载波相位有效
-    range_valid = (status_word >> 12) & 0x1    # bit 12: 伪距有效
-    
-    # 根据系统生成基本观测类型（基站版本，不包含多普勒）
-    obs_types = []
-    
-    if sys_code == 'G':  # GPS
-        if n5 == 0: obs_types = ['C1C', 'L1C', 'S1C']
-        elif n5 == 3: obs_types = ['C1X', 'L1X', 'S1X']
-        elif n5 == 6: obs_types = ['C5I', 'L5I', 'S5I']
-        elif n5 == 9: obs_types = ['C2W', 'L2W', 'S2W'] # From base_fomat.obs, not C2P
-        elif n5 == 14: obs_types = ['C5Q', 'L5Q', 'S5Q']
-        elif n5 == 17: obs_types = ['C2L', 'L2L', 'S2L']
-            
-    elif sys_code == 'R':  # GLONASS
-        if n5 == 0: obs_types = ['C1C', 'L1C', 'S1C']
-        elif n5 == 5: obs_types = ['C2P', 'L2P', 'S2P'] # From base_fomat.obs, C2P not C2C
-        elif n5 == 6: obs_types = ['C3I', 'L3I', 'S3I']
-        elif n5 == 7: obs_types = ['C3Q', 'L3Q', 'S3Q']
-
-    elif sys_code == 'C':  # BDS
-        if n5 == 0: obs_types = ['C1I', 'L1I', 'S1I']
-        elif n5 == 4: obs_types = ['C1Q', 'L1Q', 'S1Q']
-        elif n5 == 8: obs_types = ['C1P', 'L1P', 'S1P']
-        elif n5 == 12: obs_types = ['C7Q', 'L7Q', 'S7Q'] # B2a pilot
-        elif n5 == 17: obs_types = ['C2I', 'L2I', 'S2I']
-        elif n5 == 21: obs_types = ['C6I', 'L6I', 'S6I']
-        elif n5 == 23: obs_types = ['C1D', 'L1D', 'S1D']
-        elif n5 == 28: obs_types = ['C7D', 'L7D', 'S7D'] # B2a data
-            
-    elif sys_code == 'E':  # Galileo
-        if n5 == 1: obs_types = ['C1B', 'L1B', 'S1B']
-        elif n5 == 2: obs_types = ['C1C', 'L1C', 'S1C']
-        elif n5 == 12: obs_types = ['C5Q', 'L5Q', 'S5Q']
-        elif n5 == 17: obs_types = ['C7Q', 'L7Q', 'S7Q']
-        elif n5 == 18: obs_types = ['C6B', 'L6B', 'S6B']
-        elif n5 == 22: obs_types = ['C6C', 'L6C', 'S6C']
-            
-    elif sys_code == 'J':  # QZSS
-        if n5 == 0: obs_types = ['C1C', 'L1C', 'S1C']
-        elif n5 == 6: obs_types = ['C5I', 'L5I', 'S5I']
-        elif n5 == 14: obs_types = ['C5Q', 'L5Q', 'S5Q']
-        elif n5 == 17: obs_types = ['C2S', 'L2S', 'S2S'] # From base_fomat.obs, C2S not C2L
-            
-    elif sys_code == 'S':  # SBAS
-        if n5 == 0: obs_types = ['C1C', 'L1C', 'S1C']
-        elif n5 == 6: obs_types = ['C5I', 'L5I', 'S5I']
-
-    # 基站特殊处理：过滤无效数据
-    if not carrier_valid:
-        obs_types = [t for t in obs_types if not t.startswith('L')]
-    if not range_valid:
-        obs_types = [t for t in obs_types if not t.startswith('C')]
-
-    return {sys_code: obs_types}
-
-def generate_rinex_obs_types_base(status_words):
-    """
-    生成基站全系统的RINEX 3.02头文件观测类型定义
-    :param status_words: 状态字列表
-    :return: list (RINEX头格式行列表)
-    """
-    from collections import defaultdict
-    obs_dict = defaultdict(set)  # 使用set避免重复
-
-    # 从状态字中解析观测类型
-    for word in status_words:
-        result = parse_all_satellites(word)
-        for sys, types in result.items():
-            obs_dict[sys].update(types)
-
-    # 如果没有解析到任何观测类型，发出警告并返回空
-    if not obs_dict:
-        print("警告：未能从状态字解析出任何有效的观测类型。")
-        return [], {}
-
-    # 排序并生成RINEX格式
-    lines = []
-    for sys_code in sorted(obs_dict.keys()):
-        # Custom sort order based on RINEX standard (Code, Freq, Attr)
-        types = sorted(list(obs_dict[sys_code]), key=lambda x: (x[0], x[1], x[2]))
-        
-        if not types:
-            continue
-        
-        # Format lines to have max 13 observation types per line
-        i = 0
-        while i < len(types):
-            chunk = types[i:i+13]
-            obs_str = ' '.join(f"{t:<4}" for t in chunk)
-            if i == 0:
-                line = f"{sys_code}   {len(types):<2} {obs_str:<51} SYS / # / OBS TYPES "
-            else:
-                line = f"      {obs_str:<51} SYS / # / OBS TYPES "
-            lines.append(line.rstrip())
-            i += 13
-    
-    return lines, obs_dict
-
-def parse_obsvbasea_to_rinex(obsvbasea_data, output_file):
-    """
-    基站OBSVBASEA数据解析器，转换为RINEX 3.02格式
+    整合卫星标识计算的OBSVBASEA数据解析器
     """
     try:
         # 系统映射表
@@ -153,26 +28,31 @@ def parse_obsvbasea_to_rinex(obsvbasea_data, output_file):
         header_fields = [field.strip() for field in header_section.split(',') if field.strip()]
         
         # 提取历元头信息
-        # 格式: #OBSBASEA,88,GPS,FINE,2368,291726000,0,0,18,668
-        time_system = header_fields[2] if len(header_fields) > 2 else "GPS"  # 第3个字段：时间系统
-        time_quality = header_fields[3] if len(header_fields) > 3 else "FINE"  # 第4个字段：时间质量
-        gps_week = int(header_fields[4]) if len(header_fields) > 4 else 2368  # 第5个字段：GPS周数
-        gps_tow_ms = int(header_fields[5]) if len(header_fields) > 5 else 291726000  # 第6个字段：GPS周内秒(ms)
-        leap_seconds = int(header_fields[8]) if len(header_fields) > 8 else 18  # 第9个字段：闰秒
-        output_delay = int(header_fields[9]) if len(header_fields) > 9 else 0  # 第10个字段：数据输出延迟
-        
-        # 将GPS周数和周内秒转换为年月日时分秒
+        # 格式: #OBSVBASEA,88,GPS,FINE,2368,291726000,0,0,18,37
+        time_system = header_fields[2] if len(header_fields) > 2 else "GPS"      # 第4个字段: 时间系统 (TimeRef)
+        time_quality = header_fields[3] if len(header_fields) > 3 else "FINE"     # 第5个字段: 时间质量 (TimeStatus)
+        gps_week = int(header_fields[4]) if len(header_fields) > 4 else 0        # 第6个字段: GPS周数 (Wn)
+        gps_tow_ms = int(header_fields[5]) if len(header_fields) > 5 else 0      # 第7个字段: GPS周内秒(ms) (Ms)
+        # leap_seconds = int(header_fields[8]) if len(header_fields) > 8 else 18   # 第10个字段: 闰秒 (Leap sec)， UPrecise好像不需要闰秒
+        leap_seconds = 0
+        output_delay = int(header_fields[9]) if len(header_fields) > 9 else 0 # 第11个字段: 数据输出延迟 (Output Delay)
+
+        import datetime
+
+        # 将GPS周数和周内秒转换为UTC时间
         gps_tow_s = gps_tow_ms / 1000.0  # 转换为秒
         
-        # GPS起始时间：1980年1月6日00:00:00 UTC
-        gps_epoch_days = 6 + 365 * 10 + 2  # 1970到1980年的天数（包含闰年）
-        gps_epoch_seconds = gps_epoch_days * 24 * 3600
+        # GPS时间的原点是 1980年1月6日 00:00:00 UTC
+        gps_epoch = datetime.datetime(1980, 1, 6, 0, 0, 0)
         
-        # 计算UTC时间
-        total_seconds = gps_epoch_seconds + gps_week * 7 * 24 * 3600 + gps_tow_s - leap_seconds
+        # 计算从GPS原点开始的总秒数
+        total_seconds_from_epoch = (gps_week * 7 * 24 * 3600) + gps_tow_s
         
-        import datetime
-        utc_time = datetime.datetime.utcfromtimestamp(total_seconds)
+        # 计算GPS时间
+        gps_time = gps_epoch + datetime.timedelta(seconds=total_seconds_from_epoch)
+        
+        # 从GPS时间中减去闰秒得到UTC时间
+        utc_time = gps_time - datetime.timedelta(seconds=leap_seconds)
         
         # 格式化为RINEX格式的时间
         year = utc_time.year
@@ -189,15 +69,15 @@ def parse_obsvbasea_to_rinex(obsvbasea_data, output_file):
             'hour': hour,
             'minute': minute,
             'second': second,
-            'satellite_data': parse_satellite_data(obs_section, SYS_MAP)
+            'satellite_data': parse_satellite_data(obs_section, SYS_MAP, detected_obs_types)
         }
                     
     except Exception as e:
-        print(f"Error processing OBSBASEA data: {e}")
+        print(f"Error processing OBSVBASEA data: {e}")
         return None
 
-def parse_satellite_data(obs_section, SYS_MAP):
-    """解析基站卫星观测数据"""
+def parse_satellite_data(obs_section, SYS_MAP, detected_obs_types=None):
+    """解析卫星观测数据"""
     # 解析观测数据字段
     fields = [field.strip() for field in obs_section.split(',') if field.strip()]
     
@@ -208,7 +88,11 @@ def parse_satellite_data(obs_section, SYS_MAP):
     # 存储卫星数据
     satellite_data = {}
     
-    # 每11个字段为一组处理卫星数据（基站格式）
+    # 如果提供了观测类型收集器，初始化
+    if detected_obs_types is None:
+        detected_obs_types = {}
+    
+    # 每11个字段为一组处理卫星数据（ASCII格式简化版）
     successful_parses = 0
     filtered_out = 0
     for i in range(0, len(fields), 11):
@@ -218,7 +102,7 @@ def parse_satellite_data(obs_section, SYS_MAP):
         group = fields[i:i+11]
         
         try:
-            # 解析字段 - 与流动站相同的字段结构
+            # 解析字段 - ASCII格式映射
             system_freq = group[0]   # GLONASS频点或其他系统标识
             prn = group[1]           # PRN号
             psr = group[2]           # 伪距
@@ -232,7 +116,7 @@ def parse_satellite_data(obs_section, SYS_MAP):
             ch_tr_status = group[10] # 跟踪状态
             
             # ==== 卫星标识计算核心逻辑 ====
-            # 1. 转换跟踪状态为整数
+            # 1. 转换跟踪状态为整数（使用第10个字段）
             try:
                 ch_tr_int = int(ch_tr_status, 16)
             except ValueError:
@@ -254,10 +138,7 @@ def parse_satellite_data(obs_section, SYS_MAP):
             if sys_char == 'R':
                 # 对GLONASS卫星，根据文档PRN范围38~61，减去37得到标准ID 1~24
                 # 但实际RINEX中GLONASS使用1~24的编号
-                if prn_int >= 38:  # GLONASS卫星的标准PRN范围
-                    mapped_prn = prn_int - 37
-                else:
-                    mapped_prn = prn_int
+                mapped_prn = prn_int - 37
                 sat_id = f"{sys_char}{mapped_prn:02d}"
             else:
                 sat_id = f"{sys_char}{prn_int:02d}"
@@ -274,7 +155,7 @@ def parse_satellite_data(obs_section, SYS_MAP):
             except ValueError:
                 continue
             
-            # 基本数据质量过滤（基站通常信号质量较好，过滤条件可以适当放宽）
+            # 基本数据质量过滤（第一版简化过滤）
             quality_check_passed = True
             
             # 1. 伪距有效性检查
@@ -285,8 +166,8 @@ def parse_satellite_data(obs_section, SYS_MAP):
             if adr_valid == 0:
                 quality_check_passed = False
             
-            # 3. 载噪比基本阈值检查（基站阈值可以稍低）
-            if cn0_val < 20.0:
+            # 3. 载噪比基本阈值检查
+            if cn0_val < 25.0:
                 quality_check_passed = False
             
             # 如果质量检查不通过，跳过此观测记录
@@ -297,117 +178,398 @@ def parse_satellite_data(obs_section, SYS_MAP):
             
             # 转换数值
             try:
-                psr_val = float(psr) if psr_valid else None
-                adr_val = abs(float(adr)) if adr_valid else None
-                cn0_val = float(cn0) / 100.0 if cn0 else None
-                dopp_val = float(dopp) if (ch_tr_int >> 11) & 0x1 else None # Doppler valid bit 11
+                psr_val = float(psr)
+                adr_val = abs(float(adr))  # 载波相位取绝对值
+                dopp_val = float(dopp)
+                cn0_val = float(cn0) / 100.0  # 转换为dB-Hz
             except ValueError:
                 continue
             
             # 存储观测值
             if sat_id not in satellite_data:
-                satellite_data[sat_id] = {}
+                satellite_data[sat_id] = []
             
-            # 从状态字解析观测类型
-            obs_map = parse_all_satellites(ch_tr_int)
-            sys_code = sat_id[0]
-            if sys_code in obs_map:
-                for obs_type in obs_map[sys_code]:
-                    if obs_type.startswith('C') and psr_val is not None:
-                        satellite_data[sat_id][obs_type] = psr_val
-                    elif obs_type.startswith('L') and adr_val is not None:
-                        satellite_data[sat_id][obs_type] = adr_val
-                    elif obs_type.startswith('S') and cn0_val is not None:
-                        satellite_data[sat_id][obs_type] = cn0_val
+            # 确定观测类型并记录到检测列表中
+            sys_char = sat_id[0]
+            if sys_char not in detected_obs_types:
+                detected_obs_types[sys_char] = set()
             
+            # 根据卫星系统和跟踪状态确定观测类型
+            obs_type_info = determine_obs_types_from_status(ch_tr_int, sys_char)
+            detected_obs_types[sys_char].update(obs_type_info)
+            
+            satellite_data[sat_id].append({
+                'psr': psr_val,
+                'adr': adr_val,
+                'dopp': dopp_val,
+                'cn0': cn0_val
+            })
             successful_parses += 1
             
         except Exception as e:
             continue
     
-    print(f"基站数据：成功解析了 {successful_parses} 个卫星观测数据")
-    print(f"基站数据：过滤了 {filtered_out} 个低质量观测数据")
+    print(f"成功解析了 {successful_parses} 个卫星观测数据")
+    print(f"过滤了 {filtered_out} 个低质量观测数据")
     
     return satellite_data
 
-def analyze_satellite_systems_base(input_file):
+def determine_obs_types_from_status(status_word, sys_char):
     """
-    分析基站输入文件中的卫星系统类型和实际观测类型，返回观测类型定义
+    根据跟踪状态字和卫星系统确定观测类型（与 REF_CODES/unicore.c 保持一致）
+    - 信号类型(sigtype): 位21-25（5位）
+    - L2C 标志(l2c): 位26（1位），仅在 GPS/QZSS 的 sigtype==9 时区分 L2C(M) 与 L2P(Y)/semi-codeless
+    """
+    obs_types = set()
+
+    sigtype = (status_word >> 21) & 0x1F
+    l2c = (status_word >> 26) & 0x01
+
+    if sys_char == 'G':  # GPS
+        if sigtype == 0:  # L1 C/A
+            obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
+        elif sigtype == 3:  # L1C Pilot
+            obs_types.update(['C1L', 'L1L', 'D1L', 'S1L'])
+        elif sigtype == 11:  # L1C Data
+            obs_types.update(['C1S', 'L1S', 'D1S', 'S1S'])
+        elif sigtype == 6:  # L5 Data
+            obs_types.update(['C5I', 'L5I', 'D5I', 'S5I'])
+        elif sigtype == 14:  # L5 Pilot
+            obs_types.update(['C5Q', 'L5Q', 'D5Q', 'S5Q'])
+        elif sigtype == 9:  # L2: P(Y)/semi-codeless or L2C(M)
+            if l2c == 1:
+                obs_types.update(['C2S', 'L2S', 'D2S', 'S2S'])  # L2C(M)
+            else:
+                obs_types.update(['C2W', 'L2W', 'D2W', 'S2W'])  # L2P(Y) / semi-codeless
+        elif sigtype == 17:  # L2C(L)
+            obs_types.update(['C2L', 'L2L', 'D2L', 'S2L'])
+
+    elif sys_char == 'R':  # GLONASS
+        if sigtype == 0:  # L1 C/A
+            obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
+        elif sigtype == 5:  # L2 C/A
+            obs_types.update(['C2C', 'L2C', 'D2C', 'S2C'])
+        elif sigtype == 6:  # G3I
+            obs_types.update(['C3I', 'L3I', 'D3I', 'S3I'])
+        elif sigtype == 7:  # G3Q
+            obs_types.update(['C3Q', 'L3Q', 'D3Q', 'S3Q'])
+
+    elif sys_char == 'E':  # Galileo
+        if sigtype == 1:  # E1B
+            obs_types.update(['C1B', 'L1B', 'D1B', 'S1B'])
+        elif sigtype == 2:  # E1C
+            obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
+        elif sigtype == 12:  # E5a Pilot
+            obs_types.update(['C5Q', 'L5Q', 'D5Q', 'S5Q'])
+        elif sigtype == 17:  # E5b Pilot
+            obs_types.update(['C7Q', 'L7Q', 'D7Q', 'S7Q'])
+        elif sigtype == 18:  # E6B
+            obs_types.update(['C6B', 'L6B', 'D6B', 'S6B'])
+        elif sigtype == 22:  # E6C
+            obs_types.update(['C6C', 'L6C', 'D6C', 'S6C'])
+
+    elif sys_char == 'J':  # QZSS
+        if sigtype == 0:  # L1 C/A
+            obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
+        elif sigtype == 1:  # L1E
+            obs_types.update(['C1E', 'L1E', 'D1E', 'S1E'])
+        elif sigtype == 3:  # L1C pilot
+            obs_types.update(['C1L', 'L1L', 'D1L', 'S1L'])
+        elif sigtype == 4:  # L1Z (L1S)
+            obs_types.update(['C1Z', 'L1Z', 'D1Z', 'S1Z'])
+        elif sigtype == 6:  # L5 Data
+            obs_types.update(['C5I', 'L5I', 'D5I', 'S5I'])
+        elif sigtype == 9:  # L2: P(Y)/semi-codeless or L2C(M)
+            if l2c == 1:
+                obs_types.update(['C2S', 'L2S', 'D2S', 'S2S'])
+            else:
+                obs_types.update(['C2W', 'L2W', 'D2W', 'S2W'])
+        elif sigtype == 11:  # L1C Data
+            obs_types.update(['C1S', 'L1S', 'D1S', 'S1S'])
+        elif sigtype == 14:  # L5 Pilot
+            obs_types.update(['C5Q', 'L5Q', 'D5Q', 'S5Q'])
+        elif sigtype == 17:  # L2C(L)
+            obs_types.update(['C2L', 'L2L', 'D2L', 'S2L'])
+        elif sigtype == 21:  # L6Z (L6D)
+            obs_types.update(['C6Z', 'L6Z', 'D6Z', 'S6Z'])
+        elif sigtype == 27:  # L6E
+            obs_types.update(['C6E', 'L6E', 'D6E', 'S6E'])
+
+    elif sys_char == 'C':  # BDS (Beidou)
+        if sigtype == 0:  # B1I
+            obs_types.update(['C1I', 'L1I', 'D1I', 'S1I'])
+        elif sigtype == 4:  # B1Q
+            obs_types.update(['C1Q', 'L1Q', 'D1Q', 'S1Q'])
+        elif sigtype == 8:  # B1C pilot
+            obs_types.update(['C1P', 'L1P', 'D1P', 'S1P'])
+        elif sigtype == 23:  # B1C data
+            obs_types.update(['C1D', 'L1D', 'D1D', 'S1D'])
+        elif sigtype == 5:  # B2Q
+            obs_types.update(['C7Q', 'L7Q', 'D7Q', 'S7Q'])
+        elif sigtype == 17:  # B2I
+            obs_types.update(['C2I', 'L2I', 'D2I', 'S2I'])
+        elif sigtype == 12:  # B2a Pilot
+            obs_types.update(['C7Q', 'L7Q', 'D7Q', 'S7Q'])
+        elif sigtype == 28:  # B2a Data
+            obs_types.update(['C7D', 'L7D', 'D7D', 'S7D'])
+        elif sigtype == 6:  # B3Q
+            obs_types.update(['C6Q', 'L6Q', 'D6Q', 'S6Q'])
+        elif sigtype == 21:  # B3I
+            obs_types.update(['C6I', 'L6I', 'D6I', 'S6I'])
+        elif sigtype == 13:  # B2b (I)
+            obs_types.update(['C7P', 'L7P', 'D7P', 'S7P'])
+
+    elif sys_char == 'I':  # IRNSS / NavIC
+        if sigtype == 6:  # L5 Data
+            obs_types.update(['C5A', 'L5A', 'D5A', 'S5A'])
+        elif sigtype == 14:  # L5 Pilot
+            obs_types.update(['C5C', 'L5C', 'D5C', 'S5C'])
+
+    elif sys_char == 'S':  # SBAS
+        if sigtype == 0:  # L1 C/A
+            obs_types.update(['C1C', 'L1C', 'D1C', 'S1C'])
+        elif sigtype == 6:  # L5I
+            obs_types.update(['C5I', 'L5I', 'D5I', 'S5I'])
+
+    return obs_types
+
+
+def get_baseinfo_position(input_file):
+    """
+    从 BASEINFOA 提取基站坐标与站号。
+    BASEINFOA 数据部分格式（见文档与样例）：
+    <status>,<X>,<Y>,<Z>,"<StationId>",<reserved>
+    返回: (x, y, z, station_id)
+    若不存在，返回 None。
     """
     try:
-        with open(input_file, 'r') as f:
-            content = f.read()
-        
-        # 查找所有OBSVBASEA记录
-        obsvbasea_pattern = r'#OBSVBASEA[^#]*'
-        obsvbasea_records = re.findall(obsvbasea_pattern, content, re.DOTALL)
-        
-        if not obsvbasea_records:
-            print("警告：未在输入文件中找到任何 #OBSVBASEA 记录。")
-            return [], {}
-        
-        # 收集所有状态字
-        status_words = []
-        
-        # 分析前几个记录来收集状态字
-        for record in obsvbasea_records[:50]:  # 分析前50个记录以获得更多样本
+        import os
+
+        def extract_from_text(text):
+            pattern = r'#BASEINFOA[^#]*'
+            recs = re.findall(pattern, text, re.DOTALL)
+            return recs
+
+        # 先在输入文件中找
+        records = []
+        try:
+            with open(input_file, 'r', encoding='utf-8', errors='ignore') as f:
+                records = extract_from_text(f.read())
+        except Exception:
+            records = []
+
+        # 若未找到，遍历同目录 *.log 文件
+        if not records:
             try:
-                if ';' not in record:
-                    continue
-                    
-                header_section, obs_section = record.split(';', 1)
-                obs_section = obs_section.strip()
-                obs_section = re.sub(r'\*[0-9a-fA-F]+$', '', obs_section)
-                
-                # 解析观测数据字段
-                fields = [field.strip() for field in obs_section.split(',') if field.strip()]
-                
-                # 跳过第一个字段（观测信息数量）
-                if fields and fields[0].isdigit():
-                    fields = fields[1:]
-                
-                # 每11个字段为一组处理卫星数据（使用第10个字段）
-                for i in range(0, len(fields), 11):
-                    if i + 10 >= len(fields):
-                        break
-                        
-                    group = fields[i:i+11]
-                    
-                    try:
-                        # 第10个字段（索引10）是我们要解析的跟踪状态字
-                        status_field = group[10]
-                        status_word = int(status_field, 16)
-                        status_words.append(status_word)
-                    except:
+                base_dir = os.path.dirname(os.path.abspath(input_file))
+                for name in os.listdir(base_dir):
+                    if not name.lower().endswith('.log'):
                         continue
-                        
-            except:
+                    path = os.path.join(base_dir, name)
+                    try:
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                            recs = extract_from_text(f.read())
+                            if recs:
+                                # 按文件时间作为粗略先后判断，后续用记录顺序挑最后一条
+                                records.extend(recs)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+
+        if not records:
+            return None
+
+        # 选择最后一条记录（通常最新），也可优先选择 status==0 的
+        chosen = None
+        for rec in reversed(records):
+            try:
+                if ';' not in rec:
+                    continue
+                _, data_section = rec.split(';', 1)
+                data_section = re.sub(r'\*[0-9a-fA-F]+$', '', data_section.strip())
+                fields = [field.strip() for field in data_section.split(',')]
+                if len(fields) < 5:
+                    continue
+                status_str = fields[0]
+                # 有的为十六进制字符串（如 00000000），容错处理
+                status_val = None
+                try:
+                    status_val = int(status_str, 16)
+                except Exception:
+                    try:
+                        status_val = int(status_str)
+                    except Exception:
+                        status_val = None
+                if status_val is None or status_val != 0:
+                    # 状态无效则继续找
+                    continue
+                x = float(fields[1])
+                y = float(fields[2])
+                z = float(fields[3])
+                station_id = fields[4].strip('"')
+                chosen = (x, y, z, station_id)
+                break
+            except Exception:
                 continue
+
+        # 若没有 status==0 的，则退而求其次选择最后一条可解析记录
+        if chosen is None:
+            rec = records[-1]
+            if ';' in rec:
+                _, data_section = rec.split(';', 1)
+                data_section = re.sub(r'\*[0-9a-fA-F]+$', '', data_section.strip())
+                fields = [field.strip() for field in data_section.split(',')]
+                if len(fields) >= 5:
+                    x = float(fields[1])
+                    y = float(fields[2])
+                    z = float(fields[3])
+                    station_id = fields[4].strip('"')
+                    chosen = (x, y, z, station_id)
+
+        return chosen
+    except Exception:
+        return None
+
+def parse_all_satellites(status_word):
+    """
+    解析全卫星系统的状态字，返回RINEX 3.02观测类型
+    :param status_word: 32位状态字（十六进制）
+    :return: dict {卫星系统: [观测类型列表]}
+    """
+    # 卫星系统映射（bit16-18）
+    SAT_SYSTEMS = {
+        0: 'G',  # GPS
+        1: 'R',  # GLONASS
+        2: 'S',  # SBAS
+        3: 'E',  # Galileo
+        4: 'C',  # BDS
+        5: 'J'   # QZSS
+    }
+
+    # 解析字段
+    sys_bits = (status_word >> 16) & 0x7  # bit16-18: 卫星系统
+    # 与 C 代码一致：sigtype 位21-25（5位），L2C 位26
+    sigtype = (status_word >> 21) & 0x1F
+    l2c = (status_word >> 26) & 0x01
+    
+    # 获取卫星系统代码
+    sys_code = SAT_SYSTEMS.get(sys_bits, None)
+    if not sys_code:
+        return {}
+
+    # 有效性检查
+    carrier_valid = (status_word >> 10) & 0x1  # bit 10: 载波相位有效
+    range_valid = (status_word >> 12) & 0x1    # bit 12: 伪距有效
+    
+    # 基于统一映射生成观测类型
+    obs_types = list(determine_obs_types_from_status(status_word, sys_code))
+
+    # 过滤无效数据
+    if not carrier_valid:
+        obs_types = [t for t in obs_types if not t.startswith(('L', 'D'))]
+    if not range_valid:
+        obs_types = [t for t in obs_types if not t.startswith('C')]
+
+    return {sys_code: obs_types}
+
+def generate_rinex_obs_types(status_words):
+    """
+    生成全系统的RINEX 3.02头文件观测类型定义
+    严格按照table.txt定义，不使用默认值
+    :param status_words: 状态字列表
+    :return: list (RINEX头格式行列表)
+    """
+    from collections import defaultdict
+    obs_dict = defaultdict(set)  # 使用set避免重复
+
+    # 从状态字中解析观测类型
+    for word in status_words:
+        result = parse_all_satellites(word)
+        for sys, types in result.items():
+            obs_dict[sys].update(types)
+
+    # 严格按照实际解析结果，不使用任何默认值
+    if not obs_dict:
+        print("警告：未能从状态字解析到任何观测类型")
+        return []
+
+    # 排序并生成RINEX格式
+    lines = []
+    for sys in sorted(obs_dict.keys()):
+        types = sorted(list(obs_dict[sys]), key=lambda x: (x[1], x[0]))  # 按频点+类型排序
         
-        if not status_words:
-            print("警告：未在 #OBSVBASEA 记录中找到任何有效的状态字。")
-            return [], {}
-        
-        # 使用精确的观测类型解析函数（基站版本）
-        obs_type_lines, obs_dict = generate_rinex_obs_types_base(status_words)
-        
-        print(f"基站从 {len(status_words)} 个状态字中解析出观测类型:")
-        for line in obs_type_lines:
-            print(f"  {line}")
-        
-        return obs_type_lines, obs_dict
-        
-    except Exception as e:
-        print(f"分析基站卫星系统时出错: {e}")
-        return [], {}
+        if not types:  # 如果某个系统没有观测类型，跳过
+            continue
+            
+        # 确保格式符合RINEX标准（80字符宽度）
+        obs_str = ' '.join(types)
+        padding = ' ' * max(0, 60 - len(f"{sys}   {len(types)} {obs_str}"))
+        lines.append(f"{sys}   {len(types)} {obs_str}{padding}SYS / # / OBS TYPES ")
+    
+    return lines
+
+
+
+def generate_obs_types_from_detected(detected_obs_types):
+    """
+    根据实际检测到的观测类型生成RINEX头部的SYS / # / OBS TYPES行
+    """
+    lines = []
+    
+    # 按系统顺序排序：G, R, C, E, J, S
+    system_order = ['G', 'R', 'C', 'E', 'J', 'S']
+    
+    for sys_char in system_order:
+        if sys_char in detected_obs_types and detected_obs_types[sys_char]:
+            # 对观测类型进行排序：按观测类型字母顺序排序 (C, D, L, S)
+            obs_types = sorted(list(detected_obs_types[sys_char]), 
+                             key=lambda x: (x[0], x[1]))  # 按观测类型+频点排序
+            
+            # 生成RINEX格式的行
+            if len(obs_types) <= 13:
+                # 所有观测类型都能放在一行
+                obs_str = ' '.join(obs_types)
+                padding = ' ' * max(0, 60 - len(f"{sys_char}   {len(obs_types)} {obs_str}"))
+                line = f"{sys_char}   {len(obs_types)} {obs_str}{padding}SYS / # / OBS TYPES "
+                lines.append(line)
+            else:
+                # 需要分多行（每行最多13个观测类型）
+                for i in range(0, len(obs_types), 13):
+                    chunk = obs_types[i:i+13]
+                    obs_str = ' '.join(chunk)
+                    
+                    if i == 0:
+                        # 第一行包含系统标识和总数
+                        padding = ' ' * max(0, 60 - len(f"{sys_char}   {len(obs_types)} {obs_str}"))
+                        line = f"{sys_char}   {len(obs_types)} {obs_str}{padding}SYS / # / OBS TYPES "
+                    else:
+                        # 后续行只包含观测类型
+                        padding = ' ' * max(0, 60 - len(f"       {obs_str}"))
+                        line = f"       {obs_str}{padding}SYS / # / OBS TYPES "
+                    lines.append(line)
+    
+    # 如果没有检测到任何观测类型，返回空列表
+    if not lines:
+        print("警告：未检测到任何观测类型")
+        return []
+    
+    return lines
+
+
 
 def parse_multi_obsvbasea_to_rinex(input_file, output_file):
     """
-    批处理多个基站OBSVBASEA数据的解析器
+    批处理多个OBSVBASEA数据的解析器
     """
     try:
-        # 分析卫星系统类型
-        obs_type_lines, obs_dict = analyze_satellite_systems_base(input_file)
+        # 仅从 BASEINFOA 提取基站坐标与站号（严格要求）
+        baseinfo = get_baseinfo_position(input_file)
+        if baseinfo is None:
+            print("错误：未找到 BASEINFOA 记录，无法获取基站坐标与站号。已按要求禁用 BESTNAV/默认兜底。")
+            sys.exit(1)
+        rover_x, rover_y, rover_z, station_id = baseinfo
+        print(f"从 BASEINFOA 读取基站坐标: X={rover_x:.4f}, Y={rover_y:.4f}, Z={rover_z:.4f}, StationID={station_id}")
         
         # 读取输入文件
         with open(input_file, 'r') as f:
@@ -423,70 +585,63 @@ def parse_multi_obsvbasea_to_rinex(input_file, output_file):
         
         print(f"找到 {len(obsvbasea_records)} 个OBSVBASEA记录")
         
+        # 初始化检测到的观测类型收集器
+        detected_obs_types = {}
+        
         # 解析所有记录
         all_epochs = []
         for i, record in enumerate(obsvbasea_records):
-            # print(f"正在处理第 {i+1}/{len(obsvbasea_records)} 个OBSVBASEA记录...")
-            epoch_data = parse_obsvbasea_to_rinex(record.strip(), None)
+            print(f"正在处理第 {i+1}/{len(obsvbasea_records)} 个OBSVBASEA记录...")
+            epoch_data = parse_obsvbasea_to_rinex(record.strip(), None, detected_obs_types)
             if epoch_data:
                 all_epochs.append(epoch_data)
         
         if not all_epochs:
-            print("没有成功解析任何OBSBASEA记录")
+            print("没有成功解析任何OBSVBASEA记录")
             return
         
         print(f"成功解析了 {len(all_epochs)} 个历元的数据")
+        
+        # 根据实际检测到的观测类型生成头部
+        print("检测到的观测类型:")
+        for sys_char, obs_types in detected_obs_types.items():
+            print(f"  {sys_char}: {sorted(list(obs_types))}")
+        
+        # 根据实际检测到的观测类型生成头部
+        print("根据实际检测到的观测类型生成头部:")
+        obs_type_lines = generate_obs_types_from_detected(detected_obs_types)
+        if not obs_type_lines:
+            print("错误：未能从数据中检测到任何有效的观测类型，无法生成头部。")
+            return
         
         # 获取时间范围
         first_epoch = all_epochs[0]
         last_epoch = all_epochs[-1]
         
-        # 固定文件头
-        import datetime
+        # 固定文件头（流动站版本 - 使用计算得到的坐标和实际检测到的观测类型）
         header = [
-            "     3.02           OBSERVATION DATA    M: Mixed            RINEX VERSION / TYPE",
-            f"RTKCONV-EX 2.5.0                        {datetime.datetime.now().strftime('%Y%m%d %H%M%S')} UTC PGM / RUN BY / DATE",
-            "format: RTCM 3                                              COMMENT             ",
-            f"log: {input_file:<47} COMMENT             ",
-            "2197                                                        MARKER NAME         ",
-            "                                                            MARKER NUMBER       ",
-            "                                                            MARKER TYPE         ",
-            "                                                            OBSERVER / AGENCY   ",
-            "                    QXWZ VRS                                REC # / TYPE / VERS ",
-            "                    ADVNULLANTENNA                          ANT # / TYPE        ",
-            " -1327852.4653  5324085.3646  3241499.0281                  APPROX POSITION XYZ ",
+            "     3.02           OBSERVATION DATA    M                   RINEX VERSION / TYPE",
+            "G = GPS,  R = GLONASS,  E = GALILEO,  C = BDS,  M = MIXED   COMMENT             ",
+            "UnicoreConvert      Unicore             20250729 100837 UTC PGM / RUN BY / DATE",
+            f"{station_id:<60}MARKER NAME         ",
+            "GEODETIC                                                    MARKER TYPE         ",
+            "Unicore-001         Unicore HPL EVT                         OBSERVER / AGENCY   ",
+            "Unicore#001         GEODETIC            Unicore UB4B0       REC # / TYPE / VERS ",
+            "Ant001              ROVER                                   ANT # / TYPE        ",
+            f" {rover_x:13.4f} {rover_y:13.4f} {rover_z:13.4f}                  APPROX POSITION XYZ ",
             "        0.0000        0.0000        0.0000                  ANTENNA: DELTA H/E/N"
         ]
         
-        # 添加动态分析的观测类型
+        # 添加实际检测到的观测类型
         header.extend(obs_type_lines)
         
-        # 添加时间信息
+        # 添加剩余的头部信息
         header.extend([
-            f"  {first_epoch['year']:4d}    {first_epoch['month']:02d}    {first_epoch['day']:02d}    {first_epoch['hour']:02d}    {first_epoch['minute']:02d}   {first_epoch['second']:11.7f}     GPS         TIME OF FIRST OBS   ",
-            f"  {last_epoch['year']:4d}    {last_epoch['month']:02d}    {last_epoch['day']:02d}    {last_epoch['hour']:02d}    {last_epoch['minute']:02d}   {last_epoch['second']:11.7f}     GPS         TIME OF LAST OBS    "
+            f"  {first_epoch['year']:4d}  {first_epoch['month']:4d}  {first_epoch['day']:4d}  {first_epoch['hour']:4d}  {first_epoch['minute']:4d}  {first_epoch['second']:6.1f}000000     GPS         TIME OF FIRST OBS    ",
+            f"  {last_epoch['year']:4d}  {last_epoch['month']:4d}  {last_epoch['day']:4d}  {last_epoch['hour']:4d}  {last_epoch['minute']:4d}  {last_epoch['second']:6.1f}000000     GPS         TIME OF LAST OBS     ",
+            "     0                                                      RCV CLOCK OFFS APPL  ",
+            "                                                            END OF HEADER        "
         ])
-        
-        # 添加相位偏移信息
-        phase_shifts = {
-            'G': ['L1C', 'L2W', 'L5Q'],
-            'E': ['L1C', 'L7Q', 'L5Q'],
-            'J': ['L1C', 'L2S', 'L5Q'],
-            'C': ['L1I', 'L7I', 'L6I']
-        }
-        sys_order_phase = ['G', 'E', 'J', 'C']
-        for sys_code in sys_order_phase:
-            if sys_code in obs_dict:
-                # Check if the system has any L-band observations at all
-                if any(t.startswith('L') for t in obs_dict[sys_code]):
-                    for obs_code in phase_shifts.get(sys_code, []):
-                        # Check if the specific observation type (like L1C) is present for the system
-                        if obs_code in obs_dict[sys_code]:
-                             header.append(f"{sys_code} {obs_code:<4} 0.00000                                              SYS / PHASE SHIFT   ")
-
-        header.append("  0                                                         GLONASS SLOT / FRQ #")
-        header.append(" C1C    0.000 C1P    0.000 C2C    0.000 C2P    0.000        GLONASS COD/PHS/BIS ")
-        header.append("                                                            END OF HEADER       ")
         
         # 写入输出文件
         with open(output_file, 'w') as f:
@@ -498,52 +653,63 @@ def parse_multi_obsvbasea_to_rinex(input_file, output_file):
             for epoch in all_epochs:
                 satellite_data = epoch['satellite_data']
                 
-                # 动态排序
+                # 动态排序：先按系统类型（G、R、C、E、J、S），然后按PRN号排序
                 def satellite_sort_key(sat_id):
+                    """卫星排序键函数"""
                     sys_char = sat_id[0]
                     prn_num = int(sat_id[1:])
-                    # Sort order from base_fomat.obs: R, C, G, E, J
-                    sys_priority = {'R': 1, 'C': 2, 'G': 3, 'E': 4, 'J': 5, 'S': 6}
+                    
+                    # 系统优先级：GPS > GLONASS > BDS > Galileo > QZSS > SBAS
+                    sys_priority = {'G': 1, 'R': 2, 'C': 3, 'E': 4, 'J': 5, 'S': 6}
                     return (sys_priority.get(sys_char, 9), prn_num)
                 
+                # 对卫星ID进行排序
                 sat_order = sorted(satellite_data.keys(), key=satellite_sort_key)
                 
-                f.write(f"> {epoch['year']:4d} {epoch['month']:02d} {epoch['day']:02d} {epoch['hour']:02d} {epoch['minute']:02d} {epoch['second']:11.7f}  0 {len(sat_order):<3}\n")
+                # 写入历元头（包含实际的卫星数量和解析出的时间）
+                f.write(f"> {epoch['year']:4d} {epoch['month']:02d} {epoch['day']:02d} {epoch['hour']:02d} {epoch['minute']:02d} {epoch['second']:11.7f}  0 {len(sat_order)}\n")
                 
+                # 按排序后的顺序写入卫星数据
                 for sat_id in sat_order:
-                    obs = satellite_data[sat_id]
-                    sys_code = sat_id[0]
+                    observations = satellite_data[sat_id]
+                    line = f"{sat_id}  "
                     
-                    line = f"{sat_id:<3}"
+                    for i, obs in enumerate(observations):
+                        # 格式化观测值，精确匹配参考文件格式
+                        if i == 0:
+                            # 第一组观测值的格式
+                            psr_str = f"{obs['psr']:12.3f}"
+                            adr_str = f"{obs['adr']:14.5f}"
+                            dopp_str = f"{obs['dopp']:10.3f}"
+                            cn0_str = f"{obs['cn0']:12.3f}"
+                            line += f"{psr_str}   {adr_str}     {dopp_str}          {cn0_str}"
+                        else:
+                            # 后续观测值的格式
+                            psr_str = f"{obs['psr']:12.3f}"
+                            adr_str = f"{obs['adr']:13.5f}"
+                            dopp_str = f"{obs['dopp']:10.3f}"
+                            cn0_str = f"{obs['cn0']:12.3f}"
+                            line += f"    {psr_str}   {adr_str}     {dopp_str}          {cn0_str}"
                     
-                    # Get the observation types for the current system, sorted correctly
-                    sys_obs_types = sorted(list(obs_dict.get(sys_code, [])), key=lambda x: (x[0], x[1], x[2]))
-
-                    obs_line = ""
-                    for obs_type in sys_obs_types:
-                        val = obs.get(obs_type)
-                        # Format to 14.3f with 2 spaces for LLI/SSI = 16 chars total
-                        obs_line += f"{val:14.3f}  " if val is not None else "                "
-                    
-                    f.write(line + obs_line.rstrip() + "\n")
+                    f.write(line + "  \n")
         
-        print(f"成功创建基站RINEX文件: {output_file}")
+        print(f"成功创建RINEX文件: {output_file}")
         print(f"包含 {len(all_epochs)} 个历元的观测数据")
                     
     except Exception as e:
-        print(f"Error processing multi OBSBASEA data: {e}")
+        print(f"Error processing multi OBSVBASEA data: {e}")
         sys.exit(1)
 
 def main():
     if len(sys.argv) != 3:
-        print("Usage: python RINEX_Multi_Base_OBS_Original.py <input_file> <output_file>")
+        print("Usage: python RINEX_Multi_Rover_OBS_Original.py <input_file> <output_file>")
         sys.exit(1)
         
     input_file = sys.argv[1]
     output_file = sys.argv[2]
     
     try:
-        print(f"Converting base station {input_file} to RINEX 3.02 format...")
+        print(f"Converting {input_file} to RINEX 3.02 format...")
         parse_multi_obsvbasea_to_rinex(input_file, output_file)
         
     except FileNotFoundError:
