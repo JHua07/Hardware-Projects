@@ -452,44 +452,6 @@ def parse_all_satellites(status_word):
 
     return {sys_code: obs_types}
 
-def generate_rinex_obs_types(status_words):
-    """
-    生成全系统的RINEX 3.02头文件观测类型定义
-    严格按照table.txt定义，不使用默认值
-    :param status_words: 状态字列表
-    :return: list (RINEX头格式行列表)
-    """
-    from collections import defaultdict
-    obs_dict = defaultdict(set)  # 使用set避免重复
-
-    # 从状态字中解析观测类型
-    for word in status_words:
-        result = parse_all_satellites(word)
-        for sys, types in result.items():
-            obs_dict[sys].update(types)
-
-    # 严格按照实际解析结果，不使用任何默认值
-    if not obs_dict:
-        print("警告：未能从状态字解析到任何观测类型")
-        return []
-
-    # 排序并生成RINEX格式
-    lines = []
-    for sys in sorted(obs_dict.keys()):
-        types = sorted(list(obs_dict[sys]), key=lambda x: (x[1], x[0]))  # 按频点+类型排序
-        
-        if not types:  # 如果某个系统没有观测类型，跳过
-            continue
-            
-        # 确保格式符合RINEX标准（80字符宽度）
-        obs_str = ' '.join(types)
-        padding = ' ' * max(0, 60 - len(f"{sys}   {len(types)} {obs_str}"))
-        lines.append(f"{sys}   {len(types)} {obs_str}{padding}SYS / # / OBS TYPES ")
-    
-    return lines
-
-
-
 def generate_obs_types_from_detected(detected_obs_types):
     """
     根据实际检测到的观测类型生成RINEX头部的SYS / # / OBS TYPES行
@@ -504,13 +466,20 @@ def generate_obs_types_from_detected(detected_obs_types):
             # 对观测类型进行排序：按观测类型字母顺序排序 (C, D, L, S)
             obs_types = sorted(list(detected_obs_types[sys_char]), 
                              key=lambda x: (x[0], x[1]))  # 按观测类型+频点排序
+            # obs_types = list(detected_obs_types[sys_char])
             
             # 生成RINEX格式的行
-            if len(obs_types) <= 13:
+            if len(obs_types) <= 8:
+                # 所有观测类型都能放在一行
+                obs_str = ' '.join(obs_types)
+                padding = ' ' * (max(0, 60 - len(f"{sys_char}   {len(obs_types)} {obs_str}")) - 1)
+                line = f"{sys_char}   {len(obs_types):>2} {obs_str}{padding}SYS / # / OBS TYPES "
+                lines.append(line)
+            elif len(obs_types) <= 13:
                 # 所有观测类型都能放在一行
                 obs_str = ' '.join(obs_types)
                 padding = ' ' * max(0, 60 - len(f"{sys_char}   {len(obs_types)} {obs_str}"))
-                line = f"{sys_char}   {len(obs_types)} {obs_str}{padding}SYS / # / OBS TYPES "
+                line = f"{sys_char}   {len(obs_types):>2} {obs_str}{padding}SYS / # / OBS TYPES "
                 lines.append(line)
             else:
                 # 需要分多行（每行最多13个观测类型）
